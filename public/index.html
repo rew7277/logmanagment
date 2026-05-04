@@ -4,7 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | SaaS Observability</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20260504-2" />
+  <style>
+    /* Critical app-shell CSS kept inline to avoid browser/CDN cache mismatch after Railway deployment */
+    body{margin:0;overflow-x:hidden}.app-shell{display:grid!important;grid-template-columns:292px minmax(0,1fr)!important;min-height:100vh}.sidebar{width:292px;max-width:292px;position:sticky;top:0;height:100vh;overflow:auto}.content{min-width:0}.edge-toggle{position:fixed!important;left:274px!important;top:50%!important;transform:translateY(-50%)!important;width:38px!important;height:76px!important;border-radius:0 18px 18px 0!important;z-index:1000!important;padding:0!important;display:grid!important;place-items:center!important}.sidebar-collapsed .app-shell{grid-template-columns:78px minmax(0,1fr)!important}.sidebar-collapsed .sidebar{width:78px!important;max-width:78px!important}.sidebar-collapsed .edge-toggle{left:60px!important}@media(max-width:760px){.app-shell{grid-template-columns:1fr!important}.sidebar{position:fixed;width:292px!important;max-width:292px!important;z-index:999;transform:translateX(0)}.sidebar-collapsed .sidebar{transform:translateX(-100%)}.edge-toggle,.sidebar-collapsed .edge-toggle{left:0!important}}
+  </style>
 </head>
 <body>
   <div class="glow a"></div><div class="glow b"></div><div class="glow c"></div>
@@ -76,6 +80,6 @@ Content-Type: application/json
     </main>
   </div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260504-2"></script>
 </body>
 </html>
