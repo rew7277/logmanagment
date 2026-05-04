@@ -17,7 +17,7 @@ Recommended:
 - DATABASE_URL=<Railway Postgres URL>
 - AUTO_MIGRATE=true
 - SEED_DEMO_DATA=false
-- INGEST_AUTH_MODE=optional during testing, strict in production
+- INGEST_AUTH_MODE=strict during testing, strict in production
 - INGEST_API_KEY=<strong random key> when strict
 - MAX_UPLOAD_BYTES=786432000
 

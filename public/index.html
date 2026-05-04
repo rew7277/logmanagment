@@ -4,29 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260504-pro-v6" />
+  <link rel="stylesheet" href="/styles.css?v=20260504-pro-v7" />
 </head>
 <body>
   <div class="app-shell" id="appShell">
     <aside class="sidebar" id="sidebar">
       <div class="brand compact-aware">
         <div class="logo">OX</div>
-        <div class="brand-copy"><h1>ObserveX</h1><p>Environment-first observability</p></div>
+        <div class="brand-copy"><h1>ObserveX</h1><p id="brandWorkspaceName">FSBL Production Ops</p></div>
       </div>
       <button id="edgeToggle" class="edge-toggle" title="Expand / collapse sidebar" aria-label="Expand / collapse sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
       <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme"><span id="themeIcon">☾</span><span class="label">Dark mode</span></button>
-      <div class="context-card sidebar-context">
-        <label>Workspace</label><select id="workspaceSelect"></select>
-        <label>Environment</label><select id="environmentSelect"><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select>
-        <label>Time Range</label><select id="timeRange"><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
-        <div class="env-pill compact"><div><span id="activeEnvText">PROD</span><small>Selected environment only</small></div><span class="dot"></span></div>
-      </div>
+      <div class="tenant-chip"><span class="dot"></span><div><strong id="tenantEnvChip">PROD</strong><small>Environment scoped</small></div></div>
       <div class="nav-title">Environment Pages</div>
       <nav class="nav" aria-label="Environment pages">
         <a class="nav-item active" href="#overview" data-page-link="overview"><span class="icon" data-icon="overview"></span><span class="label">Overview</span></a>
         <a class="nav-item" href="#apis" data-page-link="apis"><span class="icon" data-icon="apis"></span><span class="label">APIs / Services</span></a>
         <a class="nav-item" href="#endpoints" data-page-link="endpoints"><span class="icon" data-icon="endpoints"></span><span class="label">Endpoints</span></a>
-        <a class="nav-item" href="#traces" data-page-link="traces"><span class="icon" data-icon="traces"></span><span class="label">Traces</span></a>
         <a class="nav-item" href="#logs" data-page-link="logs"><span class="icon" data-icon="logs"></span><span class="label">Log Search</span></a>
         <a class="nav-item" href="#alerts" data-page-link="alerts"><span class="icon" data-icon="alerts"></span><span class="label">Alerts</span></a>
         <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon" data-icon="ops"></span><span class="label">Ops</span></a>
@@ -36,11 +30,10 @@
       <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
     </aside>
     <main class="content">
-      <header class="topbar"><div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div><div class="top-actions"><input id="globalSearch" placeholder="Search logs, trace ID, API, endpoint..." /><button id="askRcaBtn">Ask AI RCA</button></div></header>
-      <section class="page active" data-page="overview"><div class="hero-card"><div><h1><span id="heroEnv">PROD</span> observability command center</h1><p>Metrics below are calculated from ingested logs/traces for the selected environment. No mixed PROD/UAT/DEV/DR data.</p></div><div class="health-widget"><div class="score-ring" id="scoreRing">--</div><small>Health score</small></div></div><section class="cards-5" id="metrics"></section><section class="grid-2"><div class="card"><div class="section-head"><h3>Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card"><div class="section-head"><h3>Ingestion Health</h3><span>Live from DB</span></div><div class="kv-grid two" id="infraGrid"></div></div></section></section>
+      <header class="topbar"><div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div><div class="top-actions" id="topActions"><input id="globalSearch" placeholder="Search logs, trace ID, API, endpoint..." /><button id="askRcaBtn">Ask AI RCA</button></div></header>
+      <section class="page active" data-page="overview"><div class="env-command-card"><div><span class="eyebrow"><span class="dot"></span> Select environment</span><h3>Environment command center</h3><p>Choose one environment. All widgets, logs, APIs, endpoints and RCA stay isolated.</p></div><div class="env-buttons" id="envButtons"></div></div><div class="hero-card"><div><h1><span id="heroEnv">PROD</span> observability command center</h1><p>Metrics below are calculated from ingested logs/traces for the selected environment. No mixed PROD/UAT/DEV/DR data.</p></div><div class="health-widget"><div class="score-ring" id="scoreRing">--</div><small>Health score</small></div></div><section class="cards-5" id="metrics"></section><section class="grid-2"><div class="card"><div class="section-head"><h3>Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card"><div class="section-head"><h3>Ingestion Health</h3><span>Live from DB</span></div><div class="kv-grid two" id="infraGrid"></div></div></section></section>
       <section class="page" data-page="apis"><div class="card"><div class="section-head"><h3>APIs / Services</h3><span>Derived from logs</span></div><div class="service-list" id="serviceList"></div></div></section>
       <section class="page" data-page="endpoints"><div class="card"><div class="section-head"><h3>Endpoint Analytics</h3><span>Method / path visibility</span></div><div class="endpoint-table" id="endpointTable"></div></div></section>
-      <section class="page" data-page="traces"><div class="card"><div class="section-head"><h3>Trace Waterfall</h3><span>Request journey</span></div><div class="service-list" id="traceList"></div></div></section>
       <section class="page" data-page="logs"><div class="card log-search-card"><div class="section-head"><h3>Log Search</h3><span>Search after upload / API ingestion</span></div><div class="filter-grid"><input id="logQuery" placeholder="Message, API, endpoint, trace ID..." /><select id="severityFilter"><option value="">All levels</option><option>DEBUG</option><option>INFO</option><option>WARN</option><option>ERROR</option><option>FATAL</option></select><input id="serviceFilter" placeholder="API / service name" /><input id="pathFilter" placeholder="Endpoint path" /><input id="traceFilter" placeholder="Trace ID" /><select id="quickTime"><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="custom">Custom range</option></select><input id="fromTime" type="datetime-local" /><input id="toTime" type="datetime-local" /><button id="searchLogsBtn">Search Logs</button></div><div class="log-toolbar"><span id="logResultCount">0 logs</span><div class="pager"><button id="prevLogsBtn" class="secondary">Previous</button><button id="nextLogsBtn" class="secondary">Next</button><button id="clearFiltersBtn" class="secondary">Clear filters</button></div></div><div class="log-stream" id="logStream"></div></div><div class="card upload-card"><div class="section-head"><h3>Large File Ingestion</h3><span>Supports 500MB+ with streaming backend</span></div><div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" hidden /><div class="drop-icon">⇩</div><strong>Drop log file here</strong><small>or click to choose. For 500MB+ production uploads, use S3 pre-signed or chunked ingestion.</small></div><details class="upload-settings"><summary>Upload settings</summary><label>Ingest API Key</label><input id="uploadApiKey" type="password" placeholder="Only required when INGEST_AUTH_MODE=strict" /></details><textarea id="logUpload" placeholder="Or paste JSONL / raw logs here..." rows="6"></textarea><div class="upload-actions"><button id="uploadBtn">Upload Logs</button><span id="uploadStatus"></span></div></div></section>
       <section class="page" data-page="alerts"><div class="card"><div class="section-head"><h3>Alerts</h3><span>Grouped by environment</span></div><div class="alert-list" id="alertList"></div></div></section>
       <section class="page" data-page="ops"><div class="three-grid"><div class="card"><div class="section-head"><h3>Deployments</h3><span>Before vs after</span></div><div class="alert-list" id="deploymentList"></div></div><div class="card"><div class="section-head"><h3>Ingestion Jobs</h3><span>S3 / API / Upload</span></div><div class="alert-list" id="ingestionList"></div></div><div class="card"><div class="section-head"><h3>Security & Masking</h3><span>Environment policies</span></div><div class="alert-list" id="securityList"></div></div></div></section>
@@ -52,8 +45,8 @@ Content-Type: text/plain
 {"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","method":"POST","path":"/payment/status","trace_id":"TR-1001","message":"Timeout"}</pre></div><div><h4>Search logs</h4><pre>GET /api/{workspace}/{environment}/logs?q=timeout&severity=ERROR&service=payment-api&path=/payment/status&trace_id=TR-1001&range=24h&limit=200</pre></div></div></div></section>
     </main>
   </div>
-  <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><button id="modalClose" class="secondary">Close</button></div><div id="modalBody"></div></div></div>
+  <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260504-pro-v6"></script>
+  <script src="/app.js?v=20260504-pro-v7"></script>
 </body>
 </html>
