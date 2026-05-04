@@ -3,52 +3,77 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ObserveX | Environment-First Observability</title>
+  <title>ObserveX | SaaS Observability</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="glow a"></div><div class="glow b"></div><div class="glow c"></div>
-  <div class="shell">
-    <aside>
-      <div class="brand"><div class="logo">OX</div><div><h1>ObserveX</h1><p>Environment-first observability</p></div></div><div class="sidebar-actions"><button id="sidebarToggle" type="button">☰ Close</button><button id="themeToggle" type="button">☾ Dark</button></div>
-      <div class="context-card">
+  <button id="edgeToggle" class="edge-toggle" title="Open / close sidebar">☰</button>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="logo">OX</div>
+        <div class="brand-copy"><h1>ObserveX</h1><p>Environment-first observability SaaS</p></div>
+      </div>
+      <div class="sidebar-actions">
+        <button id="sidebarToggle" type="button">☰ Close</button>
+        <button id="themeToggle" type="button">☾ Dark</button>
+      </div>
+      <div class="context-card sidebar-context">
         <label>Workspace</label><select id="workspaceSelect"></select>
         <label>Environment</label><select id="environmentSelect"><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select>
         <label>Time Range</label><select id="timeRange"><option>Last 24 hours</option><option>Last 1 hour</option><option>Last 7 days</option></select>
+        <label>Ingest API Key</label><input id="apiKeyInput" type="password" placeholder="Optional for protected upload" />
         <div class="env-pill"><div><span id="activeEnvText">PROD</span><small>Selected environment only</small></div><span class="dot"></span></div>
       </div>
       <div class="nav-title">Environment Pages</div>
-      <a class="nav-item active" href="#overview"><span class="icon">◎</span> Overview</a>
-      <a class="nav-item" href="#apis"><span class="icon">API</span> APIs / Services</a>
-      <a class="nav-item" href="#endpoints"><span class="icon">EP</span> Endpoints</a>
-      <a class="nav-item" href="#traces"><span class="icon">⟡</span> Traces</a>
-      <a class="nav-item" href="#logs"><span class="icon">≋</span> Logs</a>
-      <a class="nav-item" href="#alerts"><span class="icon">⚡</span> Alerts</a>
-      <a class="nav-item" href="#ops"><span class="icon">OPS</span> Ops</a>
-      <a class="nav-item" href="#rca"><span class="icon">AI</span> AI RCA</a>
-      <div class="context-card"><strong>Product rule</strong><p>Every metric, log, trace, alert and RCA belongs to one selected environment. No mixed dashboards.</p></div>
+      <nav class="nav">
+        <a class="nav-item active" href="#overview" data-page-link="overview"><span class="icon">◎</span><span>Overview</span></a>
+        <a class="nav-item" href="#apis" data-page-link="apis"><span class="icon">API</span><span>APIs / Services</span></a>
+        <a class="nav-item" href="#endpoints" data-page-link="endpoints"><span class="icon">EP</span><span>Endpoints</span></a>
+        <a class="nav-item" href="#traces" data-page-link="traces"><span class="icon">⟡</span><span>Traces</span></a>
+        <a class="nav-item" href="#logs" data-page-link="logs"><span class="icon">≋</span><span>Logs</span></a>
+        <a class="nav-item" href="#alerts" data-page-link="alerts"><span class="icon">⚡</span><span>Alerts</span></a>
+        <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon">OPS</span><span>Ops</span></a>
+        <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon">AI</span><span>AI RCA</span></a>
+        <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon">DOC</span><span>API Docs</span></a>
+      </nav>
+      <div class="context-card product-rule"><strong>SaaS rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs. No mixed data.</p></div>
     </aside>
-    <main>
-      <section class="hero" id="overview">
-        <div class="hero-main"><div class="eyebrow"><span class="dot"></span> Workspace / Environment scoped dashboard</div><h2><span id="heroEnv">PROD</span> command center for APIs, endpoints, traces, logs and RCA.</h2><p>Simple flow: Environment Overview → API / Service → Endpoint → Trace → Logs → AI RCA.</p></div>
-        <div class="card quick-actions"><div class="section-head"><h3>Quick Actions</h3><span>Environment scoped</span></div><input id="searchBox" placeholder="Search within selected environment..." /><div class="row"><button id="askRcaBtn">Ask AI RCA</button><button onclick="location.hash='alerts'">Open Incidents</button></div><div id="dropZone" class="drop-zone"><strong>Drag & drop log file</strong><small>JSONL or raw .log/.txt, scoped to selected environment</small></div><textarea id="logUpload" placeholder='Paste JSON lines or raw log lines here, then click Upload Logs' rows="5"></textarea><button id="uploadBtn">Upload Logs</button><a class="api-doc-link" href="#apiDocs">View ingestion API docs</a></div>
+
+    <main class="content">
+      <header class="topbar">
+        <div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div>
+        <div class="top-actions"><input id="searchBox" placeholder="Search logs, trace ID, service..." /><button id="askRcaBtn">Ask AI RCA</button></div>
+      </header>
+
+      <section class="page active" data-page="overview">
+        <div class="hero-card">
+          <div><h1><span id="heroEnv">PROD</span> command center for APIs, endpoints, traces, logs and RCA.</h1><p>One clean flow: Environment Overview → API / Service → Endpoint → Trace → Logs → AI RCA.</p></div>
+          <div class="hero-stats"><div class="score-ring" id="scoreRing">--</div><small>Environment health</small></div>
+        </div>
+        <div class="flow-path"><div><b>01</b><h4>Environment</h4><p>Choose PROD/UAT/DEV/DR.</p></div><div><b>02</b><h4>API / Service</h4><p>Check health, owner and version.</p></div><div><b>03</b><h4>Endpoint</h4><p>Find method/path bottlenecks.</p></div><div><b>04</b><h4>Trace + Logs</h4><p>Replay request journey.</p></div><div><b>05</b><h4>AI RCA</h4><p>Root cause and next action.</p></div></div>
+        <section class="cards-5" id="metrics"></section>
+        <section class="grid-2"><div class="card"><div class="section-head"><h3>Selected Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card"><div class="section-head"><h3>Platform Readiness</h3><span>Score card</span></div><div class="kv-grid two" id="infraGrid"></div></div></section>
       </section>
-      <section class="card"><div class="section-head"><h3>Simple Drilldown Flow</h3><span>No confusion, no mixed data</span></div><div class="flow-path"><div class="flow-step"><small>01</small><h4>Environment</h4><p>Start with PROD, UAT, DEV or DR.</p></div><div class="flow-step"><small>02</small><h4>API / Service</h4><p>Check health, owner, SLA, errors and version.</p></div><div class="flow-step"><small>03</small><h4>Endpoint</h4><p>Find exact method/path causing latency.</p></div><div class="flow-step"><small>04</small><h4>Trace + Logs</h4><p>Replay request journey and related logs.</p></div><div class="flow-step"><small>05</small><h4>AI RCA</h4><p>Root cause, impact and next action.</p></div></div></section>
-      <section class="layout cards-5" id="metrics"></section>
-      <section class="layout main-grid"><div class="layout"><div class="card"><div class="section-head"><h3>Selected Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card" id="apis"><div class="section-head"><h3>APIs / Services</h3><span>Service-level health</span></div><div class="service-list" id="serviceList"></div></div></div><div class="layout"><div class="card"><div class="section-head"><h3>Environment Health</h3><span>Score card</span></div><div class="score-ring" id="scoreRing">92%</div><div class="kv-grid two" id="infraGrid"></div></div><div class="card ai-card" id="rca"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div class="ai-orbit"><div class="orbit"></div><div class="brain">AI</div></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Click Ask AI RCA to analyze selected environment data.</p></div></div></div></div></section>
-      <section class="card" id="endpoints"><div class="section-head"><h3>Endpoint Analytics</h3><span>Endpoint-level visibility</span></div><div class="endpoint-table" id="endpointTable"></div></section>
-      <section class="layout two-grid"><div class="card" id="traces"><div class="section-head"><h3>Trace Waterfall</h3><span>Request journey</span></div><div class="service-list" id="traceList"></div></div><div class="card" id="logs"><div class="section-head"><h3>Live Logs</h3><span>No cross-environment logs</span></div><div class="log-stream" id="logStream"></div></div></section>
-      <section class="layout three-grid" id="ops"><div class="card" id="alerts"><div class="section-head"><h3>Alerts</h3><span>Grouped by environment</span></div><div class="alert-list" id="alertList"></div></div><div class="card"><div class="section-head"><h3>Deployments</h3><span>Before vs after</span></div><div class="alert-list" id="deploymentList"></div></div><div class="card"><div class="section-head"><h3>Ingestion</h3><span>S3 / API / Upload</span></div><div class="alert-list" id="ingestionList"></div></div></section>
-      <section class="layout two-grid"><div class="card"><div class="section-head"><h3>Security & Masking</h3><span>Environment policies</span></div><div class="alert-list" id="securityList"></div></div><div class="card"><div class="section-head"><h3>Scalable Architecture</h3><span>Environment partitioned</span></div><div class="architecture"><div class="arch-box"><small>01</small><strong>Org / Workspace</strong><p>Tenant boundary.</p></div><div class="arch-box"><small>02</small><strong>Environment</strong><p>Mandatory partition.</p></div><div class="arch-box"><small>03</small><strong>Queue</strong><p>Async ingestion.</p></div><div class="arch-box"><small>04</small><strong>PostgreSQL</strong><p>Metadata + logs for starter.</p></div><div class="arch-box"><small>05</small><strong>S3 Archive</strong><p>Raw log archive.</p></div><div class="arch-box"><small>06</small><strong>Search Store</strong><p>Future ClickHouse/OpenSearch.</p></div><div class="arch-box"><small>07</small><strong>AI RCA</strong><p>Scoped RCA context.</p></div></div></div></section>
-    <section class="card" id="apiDocs"><div class="section-head"><h3>Log Ingestion API Documentation</h3><span>Production integration</span></div><div class="docs-grid"><div><h4>Raw/JSONL upload</h4><pre>POST /api/{workspace}/{environment}/logs/upload
+
+      <section class="page" data-page="apis"><div class="card"><div class="section-head"><h3>APIs / Services</h3><span>Service-level health</span></div><div class="service-list" id="serviceList"></div></div></section>
+      <section class="page" data-page="endpoints"><div class="card"><div class="section-head"><h3>Endpoint Analytics</h3><span>Method / path visibility</span></div><div class="endpoint-table" id="endpointTable"></div></div></section>
+      <section class="page" data-page="traces"><div class="card"><div class="section-head"><h3>Trace Waterfall</h3><span>Request journey</span></div><div class="service-list" id="traceList"></div></div></section>
+      <section class="page" data-page="logs"><div class="grid-2"><div class="card"><div class="section-head"><h3>Live Logs</h3><span>No cross-environment logs</span></div><div class="log-stream" id="logStream"></div></div><div class="card"><div class="section-head"><h3>Drag & Drop Log Ingestion</h3><span>JSONL / TXT / LOG</span></div><div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" hidden /><div class="drop-icon">⇩</div><strong>Drop log file here</strong><small>or click to choose a file. Data goes only to selected environment.</small></div><textarea id="logUpload" placeholder="Paste JSON lines or raw log lines here..." rows="8"></textarea><button id="uploadBtn">Upload Logs</button></div></div></section>
+      <section class="page" data-page="alerts"><div class="card"><div class="section-head"><h3>Alerts</h3><span>Grouped by environment</span></div><div class="alert-list" id="alertList"></div></div></section>
+      <section class="page" data-page="ops"><div class="three-grid"><div class="card"><div class="section-head"><h3>Deployments</h3><span>Before vs after</span></div><div class="alert-list" id="deploymentList"></div></div><div class="card"><div class="section-head"><h3>Ingestion Jobs</h3><span>S3 / API / Upload</span></div><div class="alert-list" id="ingestionList"></div></div><div class="card"><div class="section-head"><h3>Security & Masking</h3><span>Environment policies</span></div><div class="alert-list" id="securityList"></div></div></div></section>
+      <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div class="ai-orbit"><div class="orbit"></div><div class="brain">AI</div></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Click Ask AI RCA to analyze selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
+      <section class="page" data-page="apiDocs"><div class="card"><div class="section-head"><h3>Log Ingestion API Documentation</h3><span>Production integration</span></div><div class="docs-grid"><div><h4>Raw / JSONL upload</h4><pre>POST /api/{workspace}/{environment}/logs/upload
 Authorization: Bearer &lt;INGEST_API_KEY&gt;
 Content-Type: text/plain
 
-{&quot;timestamp&quot;:&quot;2026-05-04T10:00:00Z&quot;,&quot;severity&quot;:&quot;ERROR&quot;,&quot;service&quot;:&quot;payment-api&quot;,&quot;trace_id&quot;:&quot;TR-1001&quot;,&quot;message&quot;:&quot;Timeout&quot;}</pre></div><div><h4>Structured JSON</h4><pre>POST /api/{workspace}/{environment}/logs
+{"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","trace_id":"TR-1001","message":"Timeout"}</pre></div><div><h4>Structured JSON</h4><pre>POST /api/{workspace}/{environment}/logs
 Authorization: Bearer &lt;INGEST_API_KEY&gt;
 Content-Type: application/json
 
-[{ &quot;severity&quot;:&quot;WARN&quot;, &quot;service_name&quot;:&quot;bbps-api&quot;, &quot;method&quot;:&quot;POST&quot;, &quot;path&quot;:&quot;/bill/fetch&quot;, &quot;message&quot;:&quot;Partner latency&quot; }]</pre></div></div></section></main>
+[{"severity":"WARN","service_name":"bbps-api","method":"POST","path":"/bill/fetch","message":"Partner latency"}]</pre></div></div></div></section>
+    </main>
   </div>
   <div id="toastHost" class="toast-host"></div>
   <script src="/app.js"></script>

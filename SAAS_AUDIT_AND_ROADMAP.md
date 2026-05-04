@@ -60,3 +60,13 @@
 - Tenant custom branding and custom domain/subdomain routing.
 - Data retention, export, and delete workflows.
 - SOC2-style controls: audit logs, access reviews, encryption, backup, DR drill evidence.
+
+## UI fixes added in this build
+
+- Real SPA-style page navigation: Overview, APIs / Services, Endpoints, Traces, Logs, Alerts, Ops, AI RCA and API Docs now render as separate right-side pages instead of one long page.
+- Sidebar collapse/open is now wired to JavaScript and persists in localStorage.
+- Added a floating edge handle attached to the sidebar boundary for easy open/close.
+- Light/dark theme is fully wired using `html[data-theme]` CSS variables and persists in localStorage.
+- Log ingestion now has a proper drag-and-drop zone plus click-to-select file input.
+- Upload UI supports protected ingestion by accepting an optional API key from the sidebar and sending it as `Authorization: Bearer <key>`.
+- Search remains environment-scoped and refreshes the log stream without mixing environments.
