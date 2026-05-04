@@ -3,12 +3,60 @@ import { query, hasDatabase, withTransaction } from '../db/pool.js';
 const fallback = {
   workspaces: [{ id: 'demo-workspace', name: 'FSBL Production Ops', slug: 'fsbl-prod-ops' }],
   environments: [
-    { id: 'env-prod', name: 'PROD', display_name: 'PROD', health_score: 92, status: 'degraded' },
-    { id: 'env-uat',  name: 'UAT',  display_name: 'UAT',  health_score: 96, status: 'watch' },
-    { id: 'env-dev',  name: 'DEV',  display_name: 'DEV',  health_score: 99, status: 'healthy' },
-    { id: 'env-dr',   name: 'DR',   display_name: 'DR',   health_score: 100, status: 'healthy' }
-  ]
+    { id: 'env-prod', name: 'PROD', display_name: 'PROD', health_score: 0, status: 'observed' },
+    { id: 'env-uat',  name: 'UAT',  display_name: 'UAT',  health_score: 0, status: 'observed' },
+    { id: 'env-dev',  name: 'DEV',  display_name: 'DEV',  health_score: 0, status: 'observed' },
+    { id: 'env-dr',   name: 'DR',   display_name: 'DR',   health_score: 0, status: 'observed' }
+  ],
+  logs: [],
+  ingestion: []
 };
+
+function envId(environmentName) { return `env-${String(environmentName || 'PROD').toLowerCase()}`; }
+function matchesRange(ts, range='24h') {
+  const t = new Date(ts || Date.now()).getTime();
+  const now = Date.now();
+  const ms = range === '1h' ? 3600_000 : range === '7d' ? 7*86400_000 : range === '30d' ? 30*86400_000 : 24*3600_000;
+  return t >= now - ms;
+}
+function fallbackLogs(environmentName, f={}) {
+  const page = Math.max(Number(f.page || 1), 1);
+  const pageSize = Math.min(Math.max(Number(f.limit || f.page_size || 50), 10), 500);
+  let rows = fallback.logs.filter(l => l.environment_name === environmentName);
+  if (f.range && f.range !== 'custom' && !f.from && !f.to) rows = rows.filter(l => matchesRange(l.timestamp, f.range));
+  if (f.from) rows = rows.filter(l => new Date(l.timestamp) >= new Date(f.from));
+  if (f.to) rows = rows.filter(l => new Date(l.timestamp) <= new Date(f.to));
+  if (f.severity) rows = rows.filter(l => l.severity === String(f.severity).toUpperCase());
+  if (f.service) rows = rows.filter(l => String(l.service_name || '').toLowerCase().includes(String(f.service).toLowerCase()));
+  if (f.path) rows = rows.filter(l => String(l.path || '').toLowerCase().includes(String(f.path).toLowerCase()));
+  if (f.trace_id) rows = rows.filter(l => String(l.trace_id || '').toLowerCase().includes(String(f.trace_id).toLowerCase()));
+  if (f.q) {
+    const q = String(f.q).toLowerCase();
+    rows = rows.filter(l => [l.message,l.trace_id,l.service_name,l.path,l.method].some(v => String(v||'').toLowerCase().includes(q)));
+  }
+  rows = rows.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const total = rows.length;
+  return { items: rows.slice((page-1)*pageSize, page*pageSize), total, page, page_size: pageSize, total_pages: Math.max(1, Math.ceil(total / pageSize)) };
+}
+function fallbackServices(environmentName) {
+  const map = new Map();
+  for (const l of fallback.logs.filter(x => x.environment_name === environmentName)) {
+    const name = l.service_name || 'unknown-service';
+    if (!map.has(name)) map.set(name, { id:name, name, owner:'Not mapped', runtime_version:'-', app_version:'-', status:'observed', total:0, errors:0 });
+    const s = map.get(name); s.total++; if (['ERROR','FATAL'].includes(l.severity)) s.errors++;
+  }
+  return [...map.values()].map(s => ({...s, error_rate: s.total ? (100*s.errors/s.total).toFixed(2) : 0, p95_latency_ms:0, health_score: Math.max(0, 100 - s.errors*10)}));
+}
+function fallbackEndpoints(environmentName) {
+  const map = new Map();
+  for (const l of fallback.logs.filter(x => x.environment_name === environmentName && x.path)) {
+    const key = `${l.service_name||'unknown'}|${l.method||'-'}|${l.path}`;
+    if (!map.has(key)) map.set(key, { id:key, service_name:l.service_name||'unknown-service', method:l.method||'-', path:l.path, status:'observed', calls_per_hour:0, errors:0 });
+    const e = map.get(key); e.calls_per_hour++; if (['ERROR','FATAL'].includes(l.severity)) e.errors++;
+  }
+  return [...map.values()].map(e => ({...e, error_rate: e.calls_per_hour ? (100*e.errors/e.calls_per_hour).toFixed(2) : 0, p95_latency_ms:0, backend_ms:0}));
+}
+
 
 
 async function ensureWorkspaceEnvironment(workspaceSlug='fsbl-prod-ops', environmentName='PROD') {
@@ -103,7 +151,7 @@ export async function getOverview(workspaceSlug, environmentName) {
 export async function getServices(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return [];
+  if (!hasDatabase) return fallbackServices(environmentName);
   const result = await query(
     `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status, s.health_score,
             COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
@@ -122,7 +170,7 @@ export async function getServices(workspaceSlug, environmentName) {
 export async function getEndpoints(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return [];
+  if (!hasDatabase) return fallbackEndpoints(environmentName);
   const result = await query(
     `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
             count(le.*)::int calls_per_hour,
@@ -141,12 +189,16 @@ export async function getEndpoints(workspaceSlug, environmentName) {
   return result.rows;
 }
 
-export async function getLogs(workspaceSlug, environmentName, limit = 100, filters = '') {
+export async function getLogs(workspaceSlug, environmentName, limit = 50, filters = '') {
   const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!env) return [];
+  if (!env) return { items: [], total: 0, page: 1, page_size: limit, total_pages: 0 };
   const f = typeof filters === 'string' ? { q: filters } : (filters || {});
-  if (!hasDatabase) return [];
-  const values = [env.id, Math.min(Number(limit || 100), 1000)];
+  const page = Math.max(Number(f.page || 1), 1);
+  const pageSize = Math.min(Math.max(Number(limit || 50), 10), 500);
+  const offset = (page - 1) * pageSize;
+  if (!hasDatabase) return fallbackLogs(environmentName, { ...f, page, page_size: pageSize, limit: pageSize });
+
+  const values = [env.id];
   const where = ['le.environment_id=$1'];
   const add = (sql, value) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
   const q = String(f.q || '').trim();
@@ -165,17 +217,35 @@ export async function getLogs(workspaceSlug, environmentName, limit = 100, filte
     const interval = f.range === '1h' ? '1 hour' : f.range === '7d' ? '7 days' : f.range === '30d' ? '30 days' : '24 hours';
     where.push(`le.timestamp >= now() - interval '${interval}'`);
   }
-  const result = await query(
-    `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, s.name service_name, ep.method, ep.path
-     FROM log_events le
-     LEFT JOIN services s ON s.id=le.service_id
-     LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY le.timestamp DESC
-     LIMIT $2`,
-    values
-  );
-  return result.rows;
+
+  const whereSql = where.join(' AND ');
+  const dataValues = [...values, pageSize, offset];
+  const limitParam = values.length + 1;
+  const offsetParam = values.length + 2;
+
+  const [countResult, dataResult] = await Promise.all([
+    query(
+      `SELECT count(*)::int AS total
+       FROM log_events le
+       LEFT JOIN services s ON s.id=le.service_id
+       LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+       WHERE ${whereSql}`,
+      values
+    ),
+    query(
+      `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
+              s.name service_name, ep.method, ep.path
+       FROM log_events le
+       LEFT JOIN services s ON s.id=le.service_id
+       LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+       WHERE ${whereSql}
+       ORDER BY le.timestamp DESC
+       LIMIT $${limitParam} OFFSET $${offsetParam}`,
+      dataValues
+    )
+  ]);
+  const total = countResult.rows[0]?.total || 0;
+  return { items: dataResult.rows, total, page, page_size: pageSize, total_pages: Math.ceil(total / pageSize) };
 }
 
 // ─── Single log insert ────────────────────────────────────────────────────────
@@ -245,18 +315,103 @@ export async function createLog(workspaceSlug, environmentName, payload) {
  * in a single SERIALIZABLE transaction so bulk uploads are atomic.
  */
 export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
+  if (!Array.isArray(logs) || logs.length === 0) return [];
   if (!hasDatabase) {
-    return logs.map((l) => ({ id: crypto.randomUUID(), ...l }));
+    const created = logs.map((l, i) => {
+      const row = {
+        id: `local-${Date.now()}-${i}`,
+        environment_name: environmentName,
+        timestamp: l.timestamp || new Date().toISOString(),
+        severity: String(l.severity || 'INFO').toUpperCase(),
+        trace_id: l.trace_id || null,
+        service_name: l.service_name || l.service || null,
+        method: l.method ? String(l.method).toUpperCase() : null,
+        path: l.path || l.endpoint || null,
+        message: l.message || String(l.raw || ''),
+        raw: l.raw || l
+      };
+      return row;
+    });
+    fallback.logs.push(...created);
+    fallback.ingestion.unshift({ source_type:'UPLOAD', source_name:'browser/API upload', status:'healthy', accepted_count:created.length, rejected_count:0, parser_errors:0, created_at:new Date().toISOString() });
+    return created;
   }
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) throw new Error('Environment not found');
 
   return withTransaction(async (client) => {
-    const created = [];
-    for (const log of logs) {
-      created.push(await _insertLog(client, env, log));
+    const serviceCache = new Map();
+    const endpointCache = new Map();
+
+    const services = [...new Set(logs.map(l => l.service_name || l.service).filter(Boolean))];
+    for (const name of services) {
+      const svc = await client.query(
+        `INSERT INTO services(environment_id, name, status)
+         VALUES($1,$2,'observed')
+         ON CONFLICT(environment_id, name) DO UPDATE SET name=EXCLUDED.name
+         RETURNING id`,
+        [env.id, name]
+      );
+      serviceCache.set(name, svc.rows[0].id);
     }
-    return created;
+
+    const endpointKeys = [];
+    for (const log of logs) {
+      const serviceName = log.service_name || log.service;
+      const serviceId = serviceCache.get(serviceName);
+      const method = log.method ? String(log.method).toUpperCase() : null;
+      const logPath = log.path || log.endpoint || null;
+      if (serviceId && method && logPath) {
+        const key = `${serviceId}|${method}|${logPath}`;
+        if (!endpointCache.has(key)) endpointKeys.push({ key, serviceId, method, path: logPath });
+      }
+    }
+    for (const epItem of endpointKeys) {
+      const ep = await client.query(
+        `INSERT INTO endpoints(service_id, method, path, status)
+         VALUES($1,$2,$3,'observed')
+         ON CONFLICT(service_id, method, path) DO UPDATE SET path=EXCLUDED.path
+         RETURNING id`,
+        [epItem.serviceId, epItem.method, epItem.path]
+      );
+      endpointCache.set(epItem.key, ep.rows[0].id);
+    }
+
+    const values = [];
+    const placeholders = [];
+    logs.forEach((payload, idx) => {
+      const serviceName = payload.service_name || payload.service || null;
+      const serviceId = serviceCache.get(serviceName) || null;
+      const method = payload.method ? String(payload.method).toUpperCase() : null;
+      const logPath = payload.path || payload.endpoint || null;
+      const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
+      const base = idx * 10;
+      placeholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},COALESCE($${base+6}, now()),$${base+7},$${base+8},$${base+9},$${base+10})`);
+      values.push(
+        env.org_id, env.workspace_id, env.id,
+        serviceId, endpointId,
+        payload.timestamp || null,
+        String(payload.severity || 'INFO').toUpperCase(),
+        payload.trace_id || null,
+        payload.message || String(payload.raw || ''),
+        JSON.stringify(payload)
+      );
+    });
+
+    const result = await client.query(
+      `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, timestamp, severity, trace_id, message, raw)
+       VALUES ${placeholders.join(',')}
+       RETURNING id, timestamp, severity, trace_id, message`,
+      values
+    );
+
+    await client.query(
+      `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)
+       VALUES($1,'UPLOAD','browser/API upload','healthy',now(),$2,0,0,$3)`,
+      [env.id, result.rowCount, JSON.stringify({ batch_size: logs.length })]
+    );
+
+    return result.rows;
   });
 }
 
@@ -299,7 +454,7 @@ export async function getOps(workspaceSlug, environmentName) {
   if (!env) return null;
   if (!hasDatabase) {
     return {
-      ingestion:   [{ source_type: 'S3', source_name: 'prod/app-logs/hourly', status: 'healthy', accepted_count: 128000, rejected_count: 12, parser_errors: 3 }],
+      ingestion: fallback.ingestion,
       security:    [{ event_type: 'PII_MASKING', severity: 'INFO', message: 'PII masked before indexing', count: 987 }],
       deployments: [{ version: '1.0.8', before_error_rate: 0.008, after_error_rate: 0.051, before_p95_ms: 286, after_p95_ms: 842 }]
     };
@@ -319,17 +474,18 @@ export async function rca(workspaceSlug, environmentName, queryText = '') {
     getLogs(workspaceSlug, environmentName, 50, queryText)
   ]);
 
-  const topError = logs.find((log) => ['ERROR', 'FATAL'].includes(log.severity));
-  const warnCount = logs.filter((log) => log.severity === 'WARN').length;
-  const errorCount = logs.filter((log) => ['ERROR', 'FATAL'].includes(log.severity)).length;
-  const affectedServices = [...new Set(logs.map((l) => l.service_name).filter(Boolean))].slice(0, 5);
+  const logRows = Array.isArray(logs) ? logs : (logs.items || []);
+  const topError = logRows.find((log) => ['ERROR', 'FATAL'].includes(log.severity));
+  const warnCount = logRows.filter((log) => log.severity === 'WARN').length;
+  const errorCount = logRows.filter((log) => ['ERROR', 'FATAL'].includes(log.severity)).length;
+  const affectedServices = [...new Set(logRows.map((l) => l.service_name).filter(Boolean))].slice(0, 5);
   return {
     environment: environmentName,
     query: queryText,
     summary: `${environmentName} RCA is scoped to this environment only. Health: ${overview?.environment?.health_score ?? 'N/A'}, active alerts: ${overview?.metrics?.active_alerts ?? 0}.`,
     likely_root_cause: topError ? topError.message : 'No critical error pattern found in the matched/latest logs.',
     impact: alerts.slice(0, 3).map((a) => a.title),
-    evidence: { matched_logs: logs.length, errors: errorCount, warnings: warnCount, affected_services: affectedServices },
+    evidence: { matched_logs: logRows.length, errors: errorCount, warnings: warnCount, affected_services: affectedServices },
     recommended_actions: [
       'Open the affected service and endpoint first.',
       'Inspect slow traces and backend latency split.',

@@ -1,19 +1,17 @@
 /**
- * API key authentication middleware for log ingestion endpoints.
+ * Ingestion authentication.
  *
- * Set INGEST_API_KEY in Railway environment variables.
- * If the variable is not set the middleware is a no-op (safe for local dev,
- * but you should always set it in production).
- *
- * Clients must send:  Authorization: Bearer <key>
- *                 or: X-Api-Key: <key>
+ * SaaS recommendation:
+ * - For production API/customer integrations set INGEST_AUTH_MODE=strict and INGEST_API_KEY.
+ * - For early UI testing/demo leave INGEST_AUTH_MODE=optional so browser uploads work without a key.
  */
 export function requireApiKey(req, res, next) {
   const expectedKey = process.env.INGEST_API_KEY;
-  if (!expectedKey) {
-    // Not configured — allow all traffic (warn once so it shows in logs)
+  const mode = String(process.env.INGEST_AUTH_MODE || 'optional').toLowerCase();
+
+  if (!expectedKey || mode !== 'strict') {
     if (!requireApiKey._warned) {
-      console.warn('[auth] INGEST_API_KEY not set — ingest endpoints are unprotected. Set this variable in Railway.');
+      console.warn('[auth] ingest auth is optional. Set INGEST_AUTH_MODE=strict and INGEST_API_KEY to protect ingestion APIs.');
       requireApiKey._warned = true;
     }
     return next();
@@ -24,7 +22,9 @@ export function requireApiKey(req, res, next) {
   const provided = authHeader.replace(/^Bearer\s+/i, '') || apiKeyHeader;
 
   if (!provided || provided !== expectedKey) {
-    return res.status(401).json({ error: 'Unauthorized. Provide a valid API key via Authorization: Bearer <key> or X-Api-Key header.' });
+    return res.status(401).json({
+      error: 'Upload is protected. Enter the valid ingest API key in Upload Settings, or set INGEST_AUTH_MODE=optional for UI testing.'
+    });
   }
   next();
 }
