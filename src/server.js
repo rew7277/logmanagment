@@ -33,7 +33,7 @@ app.use(cors());
 app.use(compression());
 app.use(express.json({ limit: process.env.JSON_LIMIT || '5mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h' }));
+app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '0', etag: false }));
 
 // ─── Health / Readiness ───────────────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ async function runDatabaseStartupTasks() {
       bootState.migration = 'disabled';
     }
 
-    if (process.env.SEED_DEMO_DATA !== 'false') {
+    if (process.env.SEED_DEMO_DATA === 'true') {
       bootState.seed = 'running';
       await seed();
       bootState.seed = 'completed';

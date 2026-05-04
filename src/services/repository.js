@@ -10,16 +10,32 @@ const fallback = {
   ]
 };
 
+
+async function ensureWorkspaceEnvironment(workspaceSlug='fsbl-prod-ops', environmentName='PROD') {
+  const org = await query(`INSERT INTO organizations(name, slug) VALUES($1,$2)
+    ON CONFLICT(slug) DO UPDATE SET name=EXCLUDED.name RETURNING id`, ['Default Organization', 'default-org']);
+  const wsName = workspaceSlug === 'fsbl-prod-ops' ? 'FSBL Production Ops' : workspaceSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const ws = await query(`INSERT INTO workspaces(org_id, name, slug) VALUES($1,$2,$3)
+    ON CONFLICT(org_id, slug) DO UPDATE SET name=EXCLUDED.name RETURNING id, org_id`, [org.rows[0].id, wsName, workspaceSlug]);
+  const env = await query(`INSERT INTO environments(workspace_id, name, display_name, health_score, status)
+    VALUES($1,$2,$2,0,'observed')
+    ON CONFLICT(workspace_id, name) DO UPDATE SET display_name=EXCLUDED.display_name
+    RETURNING *`, [ws.rows[0].id, environmentName]);
+  return { ...env.rows[0], workspace_slug: workspaceSlug, workspace_name: wsName, org_id: ws.rows[0].org_id, workspace_id: ws.rows[0].id };
+}
+
 export async function getWorkspaces() {
   if (!hasDatabase) return fallback.workspaces;
-  const result = await query(`SELECT id, name, slug FROM workspaces ORDER BY created_at ASC`);
+  let result = await query(`SELECT id, name, slug FROM workspaces ORDER BY created_at ASC`);
+  if (result.rows.length === 0) {
+    await ensureWorkspaceEnvironment('fsbl-prod-ops', 'PROD');
+    result = await query(`SELECT id, name, slug FROM workspaces ORDER BY created_at ASC`);
+  }
   return result.rows;
 }
 
 export async function getEnvironment(workspaceSlug, environmentName) {
-  if (!hasDatabase) {
-    return fallback.environments.find((e) => e.name === environmentName) || fallback.environments[0];
-  }
+  if (!hasDatabase) return fallback.environments.find((e) => e.name === environmentName) || fallback.environments[0];
   const result = await query(
     `SELECT e.*, w.slug workspace_slug, w.name workspace_name, o.id org_id, w.id workspace_id
      FROM environments e
@@ -28,7 +44,7 @@ export async function getEnvironment(workspaceSlug, environmentName) {
      WHERE w.slug=$1 AND e.name=$2`,
     [workspaceSlug, environmentName]
   );
-  return result.rows[0];
+  return result.rows[0] || ensureWorkspaceEnvironment(workspaceSlug, environmentName);
 }
 
 export async function getOverview(workspaceSlug, environmentName) {
@@ -39,13 +55,13 @@ export async function getOverview(workspaceSlug, environmentName) {
     return {
       environment: env,
       metrics: {
-        logs_ingested: 12_800_000,
-        error_rate: 5.1,
-        p95_latency_ms: 842,
-        active_alerts: 17,
-        services: 54,
-        endpoints: 128,
-        masking_coverage: 98.7
+        logs_ingested: 0,
+        error_rate: 0,
+        p95_latency_ms: 0,
+        active_alerts: 0,
+        services: 0,
+        endpoints: 0,
+        masking_coverage: 0
       }
     };
   }
@@ -79,7 +95,7 @@ export async function getOverview(workspaceSlug, environmentName) {
       active_alerts: alertStats.rows[0].active_alerts,
       services: serviceStats.rows[0].services,
       endpoints: endpointStats.rows[0].endpoints,
-      masking_coverage: 98.7
+      masking_coverage: 0
     }
   };
 }
@@ -87,13 +103,7 @@ export async function getOverview(workspaceSlug, environmentName) {
 export async function getServices(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) {
-    return [
-      { name: 'payment-engine-api',  owner: 'Payments Team',       runtime_version: '4.4.0', app_version: '1.0.8', status: 'degraded', health_score: 92.1, error_rate: 5.1,  p95_latency_ms: 842 },
-      { name: 'employee-portal-api', owner: 'EP Integration Team', runtime_version: '4.4.0', app_version: '2.3.1', status: 'healthy',  health_score: 97.8, error_rate: 0.42, p95_latency_ms: 420 },
-      { name: 'bbps-integration-api',owner: 'Banking Team',        runtime_version: '4.4.0', app_version: '1.5.2', status: 'watch',    health_score: 96.8, error_rate: 1.9,  p95_latency_ms: 610 }
-    ];
-  }
+  if (!hasDatabase) return [];
   const result = await query(
     `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status, s.health_score,
             COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
@@ -112,12 +122,7 @@ export async function getServices(workspaceSlug, environmentName) {
 export async function getEndpoints(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) {
-    return [
-      { method: 'POST', path: '/payment/status', service_name: 'payment-engine-api', status: 'degraded', calls_per_hour: 1840, error_rate: 5.1, p95_latency_ms: 842, backend_ms: 720 },
-      { method: 'POST', path: '/payment/initiate', service_name: 'payment-engine-api', status: 'healthy', calls_per_hour: 920, error_rate: 0.4, p95_latency_ms: 390, backend_ms: 240 }
-    ];
-  }
+  if (!hasDatabase) return [];
   const result = await query(
     `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
             count(le.*)::int calls_per_hour,
@@ -136,25 +141,39 @@ export async function getEndpoints(workspaceSlug, environmentName) {
   return result.rows;
 }
 
-export async function getLogs(workspaceSlug, environmentName, limit = 100, search = '') {
+export async function getLogs(workspaceSlug, environmentName, limit = 100, filters = '') {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) {
-    return [
-      { timestamp: new Date().toISOString(), severity: 'ERROR', trace_id: 'TR-8FA91C', message: 'Backend timeout on payment-engine connector after 800ms' },
-      { timestamp: new Date().toISOString(), severity: 'WARN',  trace_id: 'TR-8FA91C', message: 'Retry policy triggered for external bank dependency' }
-    ];
+  const f = typeof filters === 'string' ? { q: filters } : (filters || {});
+  if (!hasDatabase) return [];
+  const values = [env.id, Math.min(Number(limit || 100), 1000)];
+  const where = ['le.environment_id=$1'];
+  const add = (sql, value) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
+  const q = String(f.q || '').trim();
+  if (q) {
+    const base = values.length;
+    values.push(q, q, q, q, q);
+    where.push(`(le.message ILIKE '%' || $${base+1} || '%' OR le.trace_id ILIKE '%' || $${base+2} || '%' OR s.name ILIKE '%' || $${base+3} || '%' OR ep.path ILIKE '%' || $${base+4} || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $${base+5}))`);
+  }
+  if (f.severity) add('le.severity = ?', String(f.severity).toUpperCase());
+  if (f.service) add(`s.name ILIKE '%' || ? || '%'`, String(f.service));
+  if (f.path) add(`ep.path ILIKE '%' || ? || '%'`, String(f.path));
+  if (f.trace_id) add(`le.trace_id ILIKE '%' || ? || '%'`, String(f.trace_id));
+  if (f.from) add('le.timestamp >= ?', f.from);
+  if (f.to) add('le.timestamp <= ?', f.to);
+  if (!f.from && !f.to && f.range && f.range !== 'custom') {
+    const interval = f.range === '1h' ? '1 hour' : f.range === '7d' ? '7 days' : f.range === '30d' ? '30 days' : '24 hours';
+    where.push(`le.timestamp >= now() - interval '${interval}'`);
   }
   const result = await query(
     `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, s.name service_name, ep.method, ep.path
      FROM log_events le
      LEFT JOIN services s ON s.id=le.service_id
      LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
-     WHERE le.environment_id=$1
-       AND ($3 = '' OR le.message ILIKE '%' || $3 || '%' OR le.trace_id ILIKE '%' || $3 || '%' OR s.name ILIKE '%' || $3 || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $3))
+     WHERE ${where.join(' AND ')}
      ORDER BY le.timestamp DESC
      LIMIT $2`,
-    [env.id, limit, String(search || '').trim()]
+    values
   );
   return result.rows;
 }
@@ -244,7 +263,7 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
 export async function getTraces(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return [{ trace_id: 'TR-8FA91C', status: 'error', latency_ms: 842, service_name: 'payment-engine-api', path: '/payment/status' }];
+  if (!hasDatabase) return [];
   const result = await query(
     `SELECT t.*, s.name service_name, ep.method, ep.path
      FROM traces t
@@ -261,7 +280,7 @@ export async function getTraces(workspaceSlug, environmentName) {
 export async function getAlerts(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return [{ severity: 'P1', title: 'PROD error rate crossed 5%', description: 'Payment endpoint timeout cluster detected', status: 'open' }];
+  if (!hasDatabase) return [];
   const result = await query(
     `SELECT a.*, s.name service_name, ep.method, ep.path
      FROM alerts a

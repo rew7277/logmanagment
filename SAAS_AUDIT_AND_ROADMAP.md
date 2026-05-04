@@ -70,3 +70,13 @@
 - Log ingestion now has a proper drag-and-drop zone plus click-to-select file input.
 - Upload UI supports protected ingestion by accepting an optional API key from the sidebar and sending it as `Authorization: Bearer <key>`.
 - Search remains environment-scoped and refreshes the log stream without mixing environments.
+
+## V4 SaaS UI / Ingestion changes
+
+- Removed the old full-width Close button. Sidebar now uses a professional edge handle that collapses to icon-only mode.
+- Replaced text icons like `API`, `EP`, `OPS`, `DOC` with inline SVG navigation icons.
+- Reworked the health score widget. It now uses a clean conic progress ring instead of the earlier unprofessional orange pie style.
+- Added a dedicated Log Search page with filters for keyword, severity, API/service, endpoint path, trace ID, quick time range, and custom from/to timestamps.
+- Dashboard metrics now show zero/no-data states when there is no ingestion data instead of silently presenting fake production numbers.
+- Large file upload is implemented as backend stream parsing. Configure `MAX_UPLOAD_BYTES`; default is 750MB. For true enterprise scale, prefer S3 direct upload + background worker ingestion for 1GB+ files.
+- `SEED_DEMO_DATA` is now opt-in. Set `SEED_DEMO_DATA=true` only for demo environments. Production should keep it false.

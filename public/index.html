@@ -3,83 +3,57 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ObserveX | SaaS Observability</title>
-  <link rel="stylesheet" href="/styles.css?v=20260504-2" />
-  <style>
-    /* Critical app-shell CSS kept inline to avoid browser/CDN cache mismatch after Railway deployment */
-    body{margin:0;overflow-x:hidden}.app-shell{display:grid!important;grid-template-columns:292px minmax(0,1fr)!important;min-height:100vh}.sidebar{width:292px;max-width:292px;position:sticky;top:0;height:100vh;overflow:auto}.content{min-width:0}.edge-toggle{position:fixed!important;left:274px!important;top:50%!important;transform:translateY(-50%)!important;width:38px!important;height:76px!important;border-radius:0 18px 18px 0!important;z-index:1000!important;padding:0!important;display:grid!important;place-items:center!important}.sidebar-collapsed .app-shell{grid-template-columns:78px minmax(0,1fr)!important}.sidebar-collapsed .sidebar{width:78px!important;max-width:78px!important}.sidebar-collapsed .edge-toggle{left:60px!important}@media(max-width:760px){.app-shell{grid-template-columns:1fr!important}.sidebar{position:fixed;width:292px!important;max-width:292px!important;z-index:999;transform:translateX(0)}.sidebar-collapsed .sidebar{transform:translateX(-100%)}.edge-toggle,.sidebar-collapsed .edge-toggle{left:0!important}}
-  </style>
+  <title>ObserveX | Environment Observability SaaS</title>
+  <link rel="stylesheet" href="/styles.css?v=20260504-pro-v4" />
 </head>
 <body>
-  <div class="glow a"></div><div class="glow b"></div><div class="glow c"></div>
-  <button id="edgeToggle" class="edge-toggle" title="Open / close sidebar">☰</button>
-  <div class="app-shell">
+  <div class="app-shell" id="appShell">
     <aside class="sidebar" id="sidebar">
-      <div class="brand">
+      <div class="brand compact-aware">
         <div class="logo">OX</div>
-        <div class="brand-copy"><h1>ObserveX</h1><p>Environment-first observability SaaS</p></div>
+        <div class="brand-copy"><h1>ObserveX</h1><p>Environment-first observability</p></div>
       </div>
-      <div class="sidebar-actions">
-        <button id="sidebarToggle" type="button">☰ Close</button>
-        <button id="themeToggle" type="button">☾ Dark</button>
-      </div>
+      <button id="edgeToggle" class="edge-toggle" title="Expand / collapse sidebar" aria-label="Expand / collapse sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme"><span id="themeIcon">☾</span><span class="label">Dark mode</span></button>
       <div class="context-card sidebar-context">
         <label>Workspace</label><select id="workspaceSelect"></select>
         <label>Environment</label><select id="environmentSelect"><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select>
-        <label>Time Range</label><select id="timeRange"><option>Last 24 hours</option><option>Last 1 hour</option><option>Last 7 days</option></select>
-        <label>Ingest API Key</label><input id="apiKeyInput" type="password" placeholder="Optional for protected upload" />
-        <div class="env-pill"><div><span id="activeEnvText">PROD</span><small>Selected environment only</small></div><span class="dot"></span></div>
+        <label>Time Range</label><select id="timeRange"><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+        <label>Ingest API Key</label><input id="apiKeyInput" type="password" placeholder="Optional if API key enabled" />
+        <div class="env-pill"><div><span id="activeEnvText">PROD</span><small>Data isolation enabled</small></div><span class="dot"></span></div>
       </div>
       <div class="nav-title">Environment Pages</div>
-      <nav class="nav">
-        <a class="nav-item active" href="#overview" data-page-link="overview"><span class="icon">◎</span><span>Overview</span></a>
-        <a class="nav-item" href="#apis" data-page-link="apis"><span class="icon">API</span><span>APIs / Services</span></a>
-        <a class="nav-item" href="#endpoints" data-page-link="endpoints"><span class="icon">EP</span><span>Endpoints</span></a>
-        <a class="nav-item" href="#traces" data-page-link="traces"><span class="icon">⟡</span><span>Traces</span></a>
-        <a class="nav-item" href="#logs" data-page-link="logs"><span class="icon">≋</span><span>Logs</span></a>
-        <a class="nav-item" href="#alerts" data-page-link="alerts"><span class="icon">⚡</span><span>Alerts</span></a>
-        <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon">OPS</span><span>Ops</span></a>
-        <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon">AI</span><span>AI RCA</span></a>
-        <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon">DOC</span><span>API Docs</span></a>
+      <nav class="nav" aria-label="Environment pages">
+        <a class="nav-item active" href="#overview" data-page-link="overview"><span class="icon" data-icon="overview"></span><span class="label">Overview</span></a>
+        <a class="nav-item" href="#apis" data-page-link="apis"><span class="icon" data-icon="apis"></span><span class="label">APIs / Services</span></a>
+        <a class="nav-item" href="#endpoints" data-page-link="endpoints"><span class="icon" data-icon="endpoints"></span><span class="label">Endpoints</span></a>
+        <a class="nav-item" href="#traces" data-page-link="traces"><span class="icon" data-icon="traces"></span><span class="label">Traces</span></a>
+        <a class="nav-item" href="#logs" data-page-link="logs"><span class="icon" data-icon="logs"></span><span class="label">Log Search</span></a>
+        <a class="nav-item" href="#alerts" data-page-link="alerts"><span class="icon" data-icon="alerts"></span><span class="label">Alerts</span></a>
+        <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon" data-icon="ops"></span><span class="label">Ops</span></a>
+        <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">AI RCA</span></a>
+        <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon" data-icon="docs"></span><span class="label">API Docs</span></a>
       </nav>
-      <div class="context-card product-rule"><strong>SaaS rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs. No mixed data.</p></div>
+      <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
     </aside>
-
     <main class="content">
-      <header class="topbar">
-        <div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div>
-        <div class="top-actions"><input id="searchBox" placeholder="Search logs, trace ID, service..." /><button id="askRcaBtn">Ask AI RCA</button></div>
-      </header>
-
-      <section class="page active" data-page="overview">
-        <div class="hero-card">
-          <div><h1><span id="heroEnv">PROD</span> command center for APIs, endpoints, traces, logs and RCA.</h1><p>One clean flow: Environment Overview → API / Service → Endpoint → Trace → Logs → AI RCA.</p></div>
-          <div class="hero-stats"><div class="score-ring" id="scoreRing">--</div><small>Environment health</small></div>
-        </div>
-        <div class="flow-path"><div><b>01</b><h4>Environment</h4><p>Choose PROD/UAT/DEV/DR.</p></div><div><b>02</b><h4>API / Service</h4><p>Check health, owner and version.</p></div><div><b>03</b><h4>Endpoint</h4><p>Find method/path bottlenecks.</p></div><div><b>04</b><h4>Trace + Logs</h4><p>Replay request journey.</p></div><div><b>05</b><h4>AI RCA</h4><p>Root cause and next action.</p></div></div>
-        <section class="cards-5" id="metrics"></section>
-        <section class="grid-2"><div class="card"><div class="section-head"><h3>Selected Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card"><div class="section-head"><h3>Platform Readiness</h3><span>Score card</span></div><div class="kv-grid two" id="infraGrid"></div></div></section>
-      </section>
-
-      <section class="page" data-page="apis"><div class="card"><div class="section-head"><h3>APIs / Services</h3><span>Service-level health</span></div><div class="service-list" id="serviceList"></div></div></section>
+      <header class="topbar"><div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div><div class="top-actions"><input id="globalSearch" placeholder="Search logs, trace ID, API, endpoint..." /><button id="askRcaBtn">Ask AI RCA</button></div></header>
+      <section class="page active" data-page="overview"><div class="hero-card"><div><h1><span id="heroEnv">PROD</span> observability command center</h1><p>Metrics below are calculated from ingested logs/traces for the selected environment. No mixed PROD/UAT/DEV/DR data.</p></div><div class="health-widget"><div class="score-ring" id="scoreRing">--</div><small>Health score</small></div></div><section class="cards-5" id="metrics"></section><section class="grid-2"><div class="card"><div class="section-head"><h3>Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div><div class="card"><div class="section-head"><h3>Ingestion Health</h3><span>Live from DB</span></div><div class="kv-grid two" id="infraGrid"></div></div></section></section>
+      <section class="page" data-page="apis"><div class="card"><div class="section-head"><h3>APIs / Services</h3><span>Derived from logs</span></div><div class="service-list" id="serviceList"></div></div></section>
       <section class="page" data-page="endpoints"><div class="card"><div class="section-head"><h3>Endpoint Analytics</h3><span>Method / path visibility</span></div><div class="endpoint-table" id="endpointTable"></div></div></section>
       <section class="page" data-page="traces"><div class="card"><div class="section-head"><h3>Trace Waterfall</h3><span>Request journey</span></div><div class="service-list" id="traceList"></div></div></section>
-      <section class="page" data-page="logs"><div class="grid-2"><div class="card"><div class="section-head"><h3>Live Logs</h3><span>No cross-environment logs</span></div><div class="log-stream" id="logStream"></div></div><div class="card"><div class="section-head"><h3>Drag & Drop Log Ingestion</h3><span>JSONL / TXT / LOG</span></div><div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" hidden /><div class="drop-icon">⇩</div><strong>Drop log file here</strong><small>or click to choose a file. Data goes only to selected environment.</small></div><textarea id="logUpload" placeholder="Paste JSON lines or raw log lines here..." rows="8"></textarea><button id="uploadBtn">Upload Logs</button></div></div></section>
+      <section class="page" data-page="logs"><div class="card log-search-card"><div class="section-head"><h3>Log Search</h3><span>Search after upload / API ingestion</span></div><div class="filter-grid"><input id="logQuery" placeholder="Message, API, endpoint, trace ID..." /><select id="severityFilter"><option value="">All levels</option><option>DEBUG</option><option>INFO</option><option>WARN</option><option>ERROR</option><option>FATAL</option></select><input id="serviceFilter" placeholder="API / service name" /><input id="pathFilter" placeholder="Endpoint path" /><input id="traceFilter" placeholder="Trace ID" /><select id="quickTime"><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="custom">Custom range</option></select><input id="fromTime" type="datetime-local" /><input id="toTime" type="datetime-local" /><button id="searchLogsBtn">Search Logs</button></div><div class="log-toolbar"><span id="logResultCount">0 logs</span><button id="clearFiltersBtn" class="secondary">Clear filters</button></div><div class="log-stream" id="logStream"></div></div><div class="card upload-card"><div class="section-head"><h3>Large File Ingestion</h3><span>Supports 500MB+ with streaming backend</span></div><div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" hidden /><div class="drop-icon">⇩</div><strong>Drop log file here</strong><small>or click to choose. Browser upload is streamed to backend; data is scoped to selected environment.</small></div><textarea id="logUpload" placeholder="Or paste JSONL / raw logs here..." rows="6"></textarea><div class="upload-actions"><button id="uploadBtn">Upload Logs</button><span id="uploadStatus"></span></div></div></section>
       <section class="page" data-page="alerts"><div class="card"><div class="section-head"><h3>Alerts</h3><span>Grouped by environment</span></div><div class="alert-list" id="alertList"></div></div></section>
       <section class="page" data-page="ops"><div class="three-grid"><div class="card"><div class="section-head"><h3>Deployments</h3><span>Before vs after</span></div><div class="alert-list" id="deploymentList"></div></div><div class="card"><div class="section-head"><h3>Ingestion Jobs</h3><span>S3 / API / Upload</span></div><div class="alert-list" id="ingestionList"></div></div><div class="card"><div class="section-head"><h3>Security & Masking</h3><span>Environment policies</span></div><div class="alert-list" id="securityList"></div></div></div></section>
-      <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div class="ai-orbit"><div class="orbit"></div><div class="brain">AI</div></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Click Ask AI RCA to analyze selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
-      <section class="page" data-page="apiDocs"><div class="card"><div class="section-head"><h3>Log Ingestion API Documentation</h3><span>Production integration</span></div><div class="docs-grid"><div><h4>Raw / JSONL upload</h4><pre>POST /api/{workspace}/{environment}/logs/upload
+      <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Run RCA from selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
+      <section class="page" data-page="apiDocs"><div class="card"><div class="section-head"><h3>Log Ingestion API Documentation</h3><span>Production integration</span></div><div class="docs-grid"><div><h4>Large raw / JSONL upload</h4><pre>POST /api/{workspace}/{environment}/logs/upload
 Authorization: Bearer &lt;INGEST_API_KEY&gt;
 Content-Type: text/plain
 
-{"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","trace_id":"TR-1001","message":"Timeout"}</pre></div><div><h4>Structured JSON</h4><pre>POST /api/{workspace}/{environment}/logs
-Authorization: Bearer &lt;INGEST_API_KEY&gt;
-Content-Type: application/json
-
-[{"severity":"WARN","service_name":"bbps-api","method":"POST","path":"/bill/fetch","message":"Partner latency"}]</pre></div></div></div></section>
+{"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","method":"POST","path":"/payment/status","trace_id":"TR-1001","message":"Timeout"}</pre></div><div><h4>Search logs</h4><pre>GET /api/{workspace}/{environment}/logs?q=timeout&severity=ERROR&service=payment-api&path=/payment/status&trace_id=TR-1001&range=24h&limit=200</pre></div></div></div></section>
     </main>
   </div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260504-2"></script>
+  <script src="/app.js?v=20260504-pro-v4"></script>
 </body>
 </html>

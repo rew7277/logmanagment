@@ -1,194 +1,24 @@
-const state = {
-  workspace: 'fsbl-prod-ops',
-  environment: 'PROD',
-  theme: localStorage.getItem('observex-theme') || 'light',
-  sidebar: localStorage.getItem('observex-sidebar') || 'open',
-  page: (location.hash || '#overview').replace('#', '') || 'overview',
-  apiKey: localStorage.getItem('observex-ingest-key') || ''
-};
-
-const $ = (id) => document.getElementById(id);
-const $$ = (selector) => Array.from(document.querySelectorAll(selector));
-const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
-const pct = (n) => `${Number(n || 0).toFixed(Number(n) % 1 ? 2 : 0)}%`;
-const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
-const badge = (label, kind = '') => `<span class="badge ${kind}">${escapeHtml(label)}</span>`;
-
-async function api(path, options = {}) {
-  const headers = { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
-  const res = await fetch(path, { ...options, headers });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-  return res.json();
-}
-
-function envPath(suffix) { return `/api/${state.workspace}/${state.environment}/${suffix}`; }
-
-function toast(message, type = 'ok') {
-  const holder = $('toastHost');
-  const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.textContent = message;
-  holder.appendChild(el);
-  setTimeout(() => el.remove(), 4200);
-}
-
-function applyShell() {
-  document.documentElement.dataset.theme = state.theme;
-  document.body.classList.toggle('sidebar-collapsed', state.sidebar === 'closed');
-  $('themeToggle').textContent = state.theme === 'dark' ? '☀ Light' : '☾ Dark';
-  $('sidebarToggle').textContent = state.sidebar === 'closed' ? '☰ Open' : '☰ Close';
-  $('edgeToggle').textContent = state.sidebar === 'closed' ? '☰' : '×';
-}
-
-function pageTitle(page) {
-  return ({ overview: 'Overview', apis: 'APIs / Services', endpoints: 'Endpoints', traces: 'Traces', logs: 'Logs & Upload', alerts: 'Alerts', ops: 'Operations', rca: 'AI RCA', apiDocs: 'Ingestion API Docs' })[page] || 'Overview';
-}
-
-function showPage(page, { updateHash = true } = {}) {
-  state.page = page || 'overview';
-  $$('.page').forEach((el) => el.classList.toggle('active', el.dataset.page === state.page));
-  $$('[data-page-link]').forEach((el) => el.classList.toggle('active', el.dataset.pageLink === state.page));
-  $('pageTitle').textContent = pageTitle(state.page);
-  if (updateHash && location.hash !== `#${state.page}`) history.replaceState(null, '', `#${state.page}`);
-}
-
-async function loadWorkspaces() {
-  const { data } = await api('/api/workspaces');
-  $('workspaceSelect').innerHTML = data.map(w => `<option value="${escapeHtml(w.slug)}">${escapeHtml(w.name)}</option>`).join('');
-  state.workspace = $('workspaceSelect').value || state.workspace;
-}
-
-function setEnvLabels() {
-  $('activeEnvText').textContent = state.environment;
-  $('heroEnv').textContent = state.environment;
-  $('summaryEnv').textContent = `${state.environment} only`;
-}
-
-function metricCard(label, value, sub, kind = '', bars = [38,66,48,82,58,92]) {
-  return `<div class="card metric"><div class="metric-top">${badge(label, kind)}<span>24h</span></div><h3>${escapeHtml(value)}</h3><p>${escapeHtml(sub)}</p><div class="mini-chart">${bars.map(h=>`<i style="height:${Number(h)}%"></i>`).join('')}</div></div>`;
-}
-
-async function loadOverview() {
-  const { data } = await api(envPath('overview'));
-  const m = data.metrics;
-  $('scoreRing').textContent = pct(data.environment.health_score);
-  $('metrics').innerHTML = [
-    metricCard(`● ${state.environment}`, pct(data.environment.health_score), 'Environment health score', data.environment.health_score < 95 ? 'warn' : 'info'),
-    metricCard('● Error rate', pct(m.error_rate), 'Calculated from log_events', m.error_rate > 2 ? 'danger' : 'info', [30,54,76,62,46,35]),
-    metricCard('● Latency', `${m.p95_latency_ms || 0}ms`, 'P95 from traces', 'purple', [44,62,85,55,72,80]),
-    metricCard('● Logs', fmt(m.logs_ingested), 'Logs ingested', 'info', [72,74,80,86,90,94]),
-    metricCard('● Alerts', fmt(m.active_alerts), 'Open incidents', m.active_alerts ? 'warn' : 'info', [12,20,36,30,42,25])
-  ].join('');
-  $('summaryGrid').innerHTML = [
-    ['Services', m.services], ['Endpoints', m.endpoints], ['Active Alerts', m.active_alerts], ['Masking', pct(m.masking_coverage)], ['Database', 'Runtime checked'], ['Partition', state.environment]
-  ].map(([k,v]) => `<div class="kv"><small>${escapeHtml(k)}</small><strong>${escapeHtml(v)}</strong></div>`).join('');
-  $('infraGrid').innerHTML = [['Queue','Future worker'],['Archive','S3 ready'],['Search','Postgres FTS'],['API Docs','Available']].map(([k,v]) => `<div class="kv"><small>${escapeHtml(k)}</small><strong>${escapeHtml(v)}</strong></div>`).join('');
-}
-
-async function loadServices() {
-  const { data } = await api(envPath('services'));
-  $('serviceList').innerHTML = data.map(s => `<div class="service-card"><div class="service-title"><div><h4>${escapeHtml(s.name)}</h4><small>Owner: ${escapeHtml(s.owner || '-')} · Runtime ${escapeHtml(s.runtime_version || '-')} · Version ${escapeHtml(s.app_version || '-')}</small></div>${badge(s.status, s.status === 'degraded' ? 'danger' : s.status === 'watch' ? 'warn' : 'info')}</div><div class="kv-grid"><div class="kv"><small>Health</small><strong>${pct(s.health_score)}</strong></div><div class="kv"><small>Error</small><strong>${pct(s.error_rate)}</strong></div><div class="kv"><small>P95</small><strong>${fmt(s.p95_latency_ms || 0)}ms</strong></div></div></div>`).join('') || '<p>No services yet.</p>';
-}
-
-async function loadEndpoints() {
-  const { data } = await api(envPath('endpoints'));
-  $('endpointTable').innerHTML = `<div class="endpoint-row header"><span>Method</span><span>Endpoint</span><span>Service</span><span>Calls/hr</span><span>Error</span><span>P95</span><span>Backend</span><span>Action</span></div>` + data.map(e => `<div class="endpoint-row"><span class="method">${escapeHtml(e.method)}</span><span>${escapeHtml(e.path)}</span><span>${escapeHtml(e.service_name)}</span><span>${fmt(e.calls_per_hour)}</span><span class="${e.error_rate > 2 ? 'bad-t' : 'good'}">${pct(e.error_rate)}</span><span>${fmt(e.p95_latency_ms || 0)}ms</span><span>${fmt(e.backend_ms || 0)}ms</span><button onclick="askRca('${escapeHtml(`${e.service_name} ${e.method} ${e.path}`)}')">RCA</button></div>`).join('');
-}
-
-async function loadTraces() {
-  const { data } = await api(envPath('traces'));
-  $('traceList').innerHTML = data.map(t => `<div class="trace-row"><div class="mono">${escapeHtml(t.trace_id)}</div><div class="wf"><i></i><i></i><i></i><i></i></div><strong>${fmt(t.latency_ms || 0)}ms</strong>${badge(t.status || 'OK', t.status === 'error' ? 'danger' : t.status === 'watch' ? 'warn' : 'info')}</div>`).join('') || '<p>No traces yet.</p>';
-}
-
-async function loadLogs() {
-  const q = encodeURIComponent($('searchBox')?.value || '');
-  const { data } = await api(envPath(`logs?limit=100&q=${q}`));
-  $('logStream').innerHTML = data.map(l => `<div class="log-row"><span>${new Date(l.timestamp).toLocaleTimeString('en-GB')}</span><span class="level ${escapeHtml(l.severity)}">${escapeHtml(l.severity)}</span><span>${l.trace_id ? `${escapeHtml(l.trace_id)} · ` : ''}${escapeHtml(l.service_name || '')} ${escapeHtml(l.message)}</span></div>`).join('') || '<p>No logs matched this environment/search.</p>';
-}
-
-async function loadAlertsAndOps() {
-  const alerts = await api(envPath('alerts'));
-  $('alertList').innerHTML = alerts.data.map(a => `<div class="alert"><div><strong>${escapeHtml(a.title)}</strong><small>${escapeHtml(a.description || a.service_name || '')}</small></div>${badge(a.severity, a.severity === 'P1' ? 'danger' : a.severity === 'P2' ? 'warn' : 'info')}</div>`).join('') || '<p>No alerts.</p>';
-  const ops = await api(envPath('ops'));
-  $('deploymentList').innerHTML = ops.data.deployments.map(d => `<div class="alert"><div><strong>${escapeHtml(d.service_name || 'Deployment')} ${escapeHtml(d.version)}</strong><small>Error ${pct(Number(d.before_error_rate || 0) * 100)} → ${pct(Number(d.after_error_rate || 0) * 100)} · P95 ${fmt(d.before_p95_ms || 0)}ms → ${fmt(d.after_p95_ms || 0)}ms</small></div>${badge('Review', Number(d.after_error_rate) > Number(d.before_error_rate) ? 'danger' : 'info')}</div>`).join('') || '<p>No deployments.</p>';
-  $('ingestionList').innerHTML = ops.data.ingestion.map(i => `<div class="alert"><div><strong>${escapeHtml(i.source_type)} · ${escapeHtml(i.source_name)}</strong><small>Accepted ${fmt(i.accepted_count)} · Rejected ${fmt(i.rejected_count)} · Parser errors ${fmt(i.parser_errors)}</small></div>${badge(i.status, i.status === 'watch' ? 'warn' : 'info')}</div>`).join('') || '<p>No ingestion jobs.</p>';
-  $('securityList').innerHTML = ops.data.security.map(s => `<div class="alert"><div><strong>${escapeHtml(s.event_type)}</strong><small>${escapeHtml(s.message)}</small></div>${badge(fmt(s.count), s.severity === 'WARN' ? 'warn' : 'info')}</div>`).join('') || '<p>No security events.</p>';
-}
-
-async function askRca(query = '') {
-  const text = query || $('rcaQuery')?.value || $('searchBox').value || `Analyze ${state.environment}`;
-  const { data } = await api(envPath('rca'), { method: 'POST', body: JSON.stringify({ query: text }) });
-  $('rcaContent').innerHTML = `<div class="insight"><h4>Summary</h4><p>${escapeHtml(data.summary)}</p></div><div class="insight"><h4>Likely root cause</h4><p>${escapeHtml(data.likely_root_cause)}</p></div><div class="insight"><h4>Evidence</h4><p>${fmt(data.evidence?.matched_logs)} matched logs · ${fmt(data.evidence?.errors)} errors · Services: ${escapeHtml((data.evidence?.affected_services || []).join(', ') || '-')}</p></div><div class="insight"><h4>Recommended actions</h4><p>${(data.recommended_actions || []).map(escapeHtml).join('<br>')}</p></div>`;
-  showPage('rca');
-}
-
-async function uploadLogs() {
-  const body = $('logUpload').value.trim();
-  if (!body) return toast('Paste or drop logs first.', 'warn');
-  const headers = { 'Content-Type': 'text/plain' };
-  if (state.apiKey) headers.Authorization = `Bearer ${state.apiKey}`;
-  const res = await fetch(envPath('logs/upload'), { method: 'POST', headers, body });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
-  const result = await res.json();
-  $('logUpload').value = '';
-  await refreshAll();
-  showPage('logs');
-  toast(`${fmt(result.inserted)} log lines uploaded to ${state.environment}.`);
-}
-
-function bindDropZone() {
-  const dz = $('dropZone');
-  const ta = $('logUpload');
-  const input = $('fileInput');
-  const loadFile = async (file) => {
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) return toast('File too large. Keep manual upload under 10 MB.', 'warn');
-    ta.value = await file.text();
-    showPage('logs');
-    toast(`${file.name} loaded. Click Upload Logs to ingest.`);
-  };
-  dz.addEventListener('click', () => input.click());
-  input.addEventListener('change', (e) => loadFile(e.target.files?.[0]));
-  ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragging'); }));
-  ['dragleave','dragend','drop'].forEach(evt => dz.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragging'); }));
-  dz.addEventListener('drop', (e) => loadFile(e.dataTransfer.files?.[0]));
-  document.addEventListener('dragover', e => e.preventDefault());
-  document.addEventListener('drop', e => e.preventDefault());
-}
-
-async function refreshAll() {
-  setEnvLabels();
-  await Promise.all([loadOverview(), loadServices(), loadEndpoints(), loadTraces(), loadLogs(), loadAlertsAndOps()]);
-}
-
-function bindEvents() {
-  $('environmentSelect').addEventListener('change', async (e) => { state.environment = e.target.value; await refreshAll(); });
-  $('workspaceSelect').addEventListener('change', async (e) => { state.workspace = e.target.value; await refreshAll(); });
-  $('askRcaBtn').addEventListener('click', () => askRca().catch(e => toast(e.message, 'error')));
-  $('rcaPageBtn').addEventListener('click', () => askRca().catch(e => toast(e.message, 'error')));
-  $('uploadBtn').addEventListener('click', () => uploadLogs().catch(e => toast(e.message, 'error')));
-  $('searchBox').addEventListener('input', () => { clearTimeout(window.__logSearchTimer); window.__logSearchTimer = setTimeout(loadLogs, 300); });
-  $('themeToggle').addEventListener('click', () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; localStorage.setItem('observex-theme', state.theme); applyShell(); });
-  const toggleSidebar = () => { state.sidebar = state.sidebar === 'closed' ? 'open' : 'closed'; localStorage.setItem('observex-sidebar', state.sidebar); applyShell(); };
-  $('sidebarToggle').addEventListener('click', toggleSidebar);
-  $('edgeToggle').addEventListener('click', toggleSidebar);
-  $('apiKeyInput').value = state.apiKey;
-  $('apiKeyInput').addEventListener('input', e => { state.apiKey = e.target.value.trim(); localStorage.setItem('observex-ingest-key', state.apiKey); });
-  $$('[data-page-link]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showPage(a.dataset.pageLink); }));
-  window.addEventListener('hashchange', () => showPage((location.hash || '#overview').replace('#', ''), { updateHash: false }));
-}
-
-(async function boot() {
-  try {
-    applyShell();
-    bindEvents();
-    bindDropZone();
-    showPage(state.page, { updateHash: false });
-    await loadWorkspaces();
-    await refreshAll();
-    setInterval(loadLogs, 6000);
-  } catch (error) {
-    console.error(error);
-    toast(error.message, 'error');
-  }
-})();
+const state={workspace:'fsbl-prod-ops',environment:'PROD',theme:localStorage.getItem('observex-theme')||'light',sidebar:localStorage.getItem('observex-sidebar')||'open',page:(location.hash||'#overview').slice(1)||'overview',apiKey:localStorage.getItem('observex-ingest-key')||''};
+const $=id=>document.getElementById(id);const $$=s=>Array.from(document.querySelectorAll(s));const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));const fmt=n=>Number(n||0).toLocaleString('en-IN');
+const icons={overview:'<svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/></svg>',apis:'<svg viewBox="0 0 24 24"><path d="M8 8h8M8 12h8M8 16h5"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg>',endpoints:'<svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/></svg>',traces:'<svg viewBox="0 0 24 24"><path d="M4 7h5l3 10h8"/><circle cx="4" cy="7" r="2"/><circle cx="12" cy="17" r="2"/><circle cx="20" cy="17" r="2"/></svg>',logs:'<svg viewBox="0 0 24 24"><path d="M7 8h10M7 12h10M7 16h7"/><rect x="4" y="4" width="16" height="16" rx="2"/></svg>',alerts:'<svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v4M12 17h.01"/></svg>',ops:'<svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3.4-.2-.1a1.7 1.7 0 0 0-2 .1 1.7 1.7 0 0 0-.9 1.7V22H9.3v-.2a1.7 1.7 0 0 0-.9-1.7 1.7 1.7 0 0 0-2-.1l-.2.1-2-3.4.1-.1A1.7 1.7 0 0 0 4.6 15"/></svg>',rca:'<svg viewBox="0 0 24 24"><path d="M12 3v18M5 8a4 4 0 0 1 7-2 4 4 0 0 1 7 2M5 16a4 4 0 0 0 7 2 4 4 0 0 0 7-2"/></svg>',docs:'<svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>'};
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('toastHost').appendChild(t);setTimeout(()=>t.remove(),3500)}
+async function api(path,opt={}){const r=await fetch(path,opt);const txt=await r.text();let j;try{j=JSON.parse(txt)}catch{j={error:txt}}if(!r.ok)throw new Error(j.error||'Request failed');return j.data??j}
+function endpoint(p){return `/api/${state.workspace}/${state.environment}${p}`}
+function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');$('themeIcon').textContent=state.theme==='dark'?'☀':'☾';localStorage.setItem('observex-theme',state.theme)}
+function applySidebar(){document.getElementById('appShell').classList.toggle('sidebar-collapsed',state.sidebar==='closed');localStorage.setItem('observex-sidebar',state.sidebar)}
+function setPage(p){state.page=p||'overview';$$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));$('pageTitle').textContent=({'overview':'Overview','apis':'APIs / Services','endpoints':'Endpoints','traces':'Traces','logs':'Log Search','alerts':'Alerts','ops':'Ops','rca':'AI RCA','apiDocs':'API Docs'}[state.page]||'Overview');if(location.hash.slice(1)!==state.page)location.hash=state.page;if(state.page==='logs')searchLogs()}
+async function initWorkspaces(){try{const ws=await api('/api/workspaces');$('workspaceSelect').innerHTML=ws.map(w=>`<option value="${w.slug}">${esc(w.name)}</option>`).join('');state.workspace=ws[0]?.slug||state.workspace;$('workspaceSelect').value=state.workspace}catch{$('workspaceSelect').innerHTML='<option value="fsbl-prod-ops">FSBL Production Ops</option>'}}
+function empty(msg){return `<div class="empty">${esc(msg)}</div>`}
+function metric(label,value,sub){return `<div class="metric-card"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`}
+function healthScore(m){const logs=Number(m.logs_ingested||0);if(!logs)return 0;const score=Math.max(0,Math.min(100,100-Number(m.error_rate||0)*2-Math.max(0,Number(m.p95_latency_ms||0)-500)/100-Number(m.active_alerts||0)*3));return Math.round(score)}
+async function loadOverview(){try{const {metrics:m}=await api(endpoint('/overview'));const score=healthScore(m);$('heroEnv').textContent=state.environment;$('scoreRing').style.setProperty('--score',score);$('scoreRing').innerHTML=`<span>${score||'--'}${score?'%':''}</span>`;$('metrics').innerHTML=[metric(state.environment,`${score||'--'}${score?'%':''}`,'Health from ingested data'),metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'ERROR/FATAL logs'),metric('Latency',`${fmt(m.p95_latency_ms)}ms`,'P95 traces'),metric('Logs',fmt(m.logs_ingested),'In selected range'),metric('Alerts',fmt(m.active_alerts),'Open alerts')].join('');$('summaryEnv').textContent=`${state.environment} only`;$('summaryGrid').innerHTML=[['Services',m.services],['Endpoints',m.endpoints],['Masking',`${m.masking_coverage||0}%`],['Database','Connected'],['Partition',state.environment],['Data source',m.logs_ingested?'Ingested logs':'No logs yet']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${v}</b></div>`).join('');$('infraGrid').innerHTML=[['Upload mode','Streaming'],['Max file','500MB+'],['Search','FTS + filters'],['Isolation','Environment scoped']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${v}</b></div>`).join('')}catch(e){toast(e.message)}}
+async function loadServices(){const rows=await api(endpoint('/services'));$('serviceList').innerHTML=rows.length?rows.map(s=>`<div class="row"><div><strong>${esc(s.name)}</strong><small>${esc(s.owner||'Owner not mapped')}</small></div><div><small>Status</small><b>${esc(s.status||'observed')}</b></div><div><small>Errors</small><b>${Number(s.error_rate||0).toFixed(2)}%</b></div><div><small>P95</small><b>${fmt(s.p95_latency_ms)}ms</b></div><div><small>Runtime</small><b>${esc(s.runtime_version||'-')}</b></div></div>`).join(''):empty('No services found yet. Upload logs with service/service_name to populate APIs automatically.')}
+async function loadEndpoints(){const rows=await api(endpoint('/endpoints'));$('endpointTable').innerHTML=rows.length?`<div class="table">${rows.map(e=>`<div class="row"><div><b>${esc(e.method||'-')}</b></div><div><strong>${esc(e.path||'-')}</strong><small>${esc(e.service_name||'service unknown')}</small></div><div><small>Status</small><b>${esc(e.status||'observed')}</b></div><div><small>Calls</small><b>${fmt(e.calls_per_hour)}</b></div><div><small>Errors</small><b>${Number(e.error_rate||0).toFixed(2)}%</b></div><div><small>P95</small><b>${fmt(e.p95_latency_ms)}ms</b></div></div>`).join('')}</div>`:empty('No endpoints yet. Include method and path in uploaded logs.')}
+async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmt(t.latency_ms)}ms</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id will still be searchable; trace rows need trace ingestion or derived tracing.')}
+async function searchLogs(){const q=new URLSearchParams({limit:'200',q:$('logQuery')?.value||$('globalSearch')?.value||'',severity:$('severityFilter')?.value||'',service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',trace_id:$('traceFilter')?.value||'',range:$('quickTime')?.value||$('timeRange')?.value||'24h',from:$('fromTime')?.value||'',to:$('toTime')?.value||''});const rows=await api(endpoint('/logs?'+q));$('logResultCount')&&($('logResultCount').textContent=`${rows.length} logs`);$('logStream').innerHTML=rows.length?rows.map(l=>`<div class="log-line ${esc(l.severity)}"><div class="log-meta"><span class="level ${esc(l.severity)}">${esc(l.severity)}</span><span>${new Date(l.timestamp).toLocaleString()}</span><span>${esc(l.service_name||'-')}</span><span>${esc((l.method||'')+' '+(l.path||''))}</span><span>${esc(l.trace_id||'-')}</span></div><div>${esc(l.message)}</div></div>`).join(''):empty('No logs matched. Upload logs or relax filters.')}
+async function loadAlertsOps(){try{const a=await api(endpoint('/alerts'));$('alertList').innerHTML=a.length?a.map(x=>`<div class="row"><div><strong>${esc(x.title)}</strong><small>${esc(x.description||'')}</small></div><div><small>Severity</small><b>${esc(x.severity)}</b></div><div><small>Status</small><b>${esc(x.status)}</b></div><div><small>Service</small><b>${esc(x.service_name||'-')}</b></div><div><small>Created</small><b>${new Date(x.created_at).toLocaleDateString()}</b></div></div>`).join(''):empty('No active alerts.');const o=await api(endpoint('/ops'));$('deploymentList').innerHTML=(o.deployments||[]).map(x=>`<div class="insight"><b>${esc(x.version)}</b><p>${esc(x.notes||'')}</p></div>`).join('')||empty('No deployments');$('ingestionList').innerHTML=(o.ingestion_jobs||[]).map(x=>`<div class="insight"><b>${esc(x.source_type)} · ${esc(x.source_name)}</b><p>${fmt(x.accepted_count)} accepted / ${fmt(x.rejected_count)} rejected</p></div>`).join('')||empty('No ingestion jobs');$('securityList').innerHTML=(o.security_events||[]).map(x=>`<div class="insight"><b>${esc(x.event_type)}</b><p>${esc(x.message)} (${fmt(x.count)})</p></div>`).join('')||empty('No security events')}catch{}}
+async function runRca(){setPage('rca');const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:$('rcaQuery').value||$('globalSearch').value||'Analyze current environment issues'})});$('rcaContent').innerHTML=`<div class="insight"><h4>${esc(data.title||'Environment RCA')}</h4><p>${esc(data.summary||'No summary')}</p></div>${(data.recommendations||[]).map(r=>`<div class="insight"><b>Action</b><p>${esc(r)}</p></div>`).join('')}`}
+async function uploadBody(body,name='pasted logs'){const headers={'Content-Type':'text/plain'};if(state.apiKey)headers.Authorization=`Bearer ${state.apiKey}`;$('uploadStatus').textContent=`Uploading ${name}...`;const res=await api(endpoint('/logs/upload'),{method:'POST',headers,body});toast(`Inserted ${res.inserted||0} logs`);$('uploadStatus').textContent='Upload completed';$('logUpload').value='';setPage('logs');await Promise.all([loadOverview(),loadServices(),loadEndpoints(),searchLogs()])}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));$('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar()};$('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme()};$$('[data-page-link]').forEach(a=>a.onclick=()=>setPage(a.dataset.pageLink));$('environmentSelect').onchange=e=>{state.environment=e.target.value;$('activeEnvText').textContent=state.environment;refreshAll()};$('workspaceSelect').onchange=e=>{state.workspace=e.target.value;refreshAll()};$('apiKeyInput').value=state.apiKey;$('apiKeyInput').onchange=e=>{state.apiKey=e.target.value;localStorage.setItem('observex-ingest-key',state.apiKey)};$('searchLogsBtn').onclick=searchLogs;$('globalSearch').addEventListener('keydown',e=>{if(e.key==='Enter'){setPage('logs');$('logQuery').value=$('globalSearch').value;searchLogs()}});$('clearFiltersBtn').onclick=()=>['logQuery','severityFilter','serviceFilter','pathFilter','traceFilter','fromTime','toTime'].forEach(id=>$(id).value='')||searchLogs();$('askRcaBtn').onclick=runRca;$('rcaPageBtn').onclick=runRca;const dz=$('dropZone'),fi=$('fileInput');dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover')}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover')}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name)});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name)};$('uploadBtn').onclick=()=>{const text=$('logUpload').value.trim();if(!text)return toast('Paste logs or choose a file first');uploadBody(text)}}
+async function refreshAll(){$('activeEnvText').textContent=state.environment;await Promise.allSettled([loadOverview(),loadServices(),loadEndpoints(),loadTraces(),searchLogs(),loadAlertsOps()])}
+(async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll()})();
