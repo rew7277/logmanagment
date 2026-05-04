@@ -206,7 +206,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   if (q) {
     const base = values.length;
     values.push(q, q, q, q, q, q, q, q);
-    where.push(`(le.message ILIKE '%' || $${base+1} || '%' OR le.trace_id ILIKE '%' || $${base+2} || '%' OR s.name ILIKE '%' || $${base+3} || '%' OR ep.path ILIKE '%' || $${base+4} || le.raw->>'event_id' ILIKE '%' || $${base+5} || '%' OR le.raw->>'correlation_id' ILIKE '%' || $${base+6} || '%' OR le.raw->>'transaction_id' ILIKE '%' || $${base+7} || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $${base+8}))`);
+    where.push(`(le.message ILIKE '%' || $${base+1} || '%' OR le.trace_id ILIKE '%' || $${base+2} || '%' OR s.name ILIKE '%' || $${base+3} || '%' OR ep.path ILIKE '%' || $${base+4} || '%' OR le.raw->>'event_id' ILIKE '%' || $${base+5} || '%' OR le.raw->>'correlation_id' ILIKE '%' || $${base+6} || '%' OR le.raw->>'transaction_id' ILIKE '%' || $${base+7} || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $${base+8}))`);
   }
   if (f.severity) add('le.severity = ?', String(f.severity).toUpperCase());
   if (f.service) add(`s.name ILIKE '%' || ? || '%'`, String(f.service));
