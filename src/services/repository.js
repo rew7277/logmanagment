@@ -418,6 +418,27 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
   });
 }
 
+
+export async function deleteEnvironmentLogs(workspaceSlug, environmentName) {
+  if (!hasDatabase) {
+    const before = fallback.logs.length;
+    fallback.logs = fallback.logs.filter(l => l.environment_name !== environmentName);
+    fallback.ingestion.unshift({ source_type:'ADMIN', source_name:'clear environment logs', status:'healthy', accepted_count:0, rejected_count:0, parser_errors:0, created_at:new Date().toISOString() });
+    return { deleted: before - fallback.logs.length, mode: 'memory' };
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return { deleted: 0 };
+  return withTransaction(async (client) => {
+    const delLogs = await client.query(`DELETE FROM log_events WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM traces WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM alerts WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM ingestion_jobs WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM endpoints ep USING services s WHERE ep.service_id=s.id AND s.environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM services WHERE environment_id=$1`, [env.id]);
+    return { deleted: delLogs.rowCount || 0, environment: environmentName };
+  });
+}
+
 export async function getTraces(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];

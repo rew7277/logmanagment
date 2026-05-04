@@ -1,5 +1,5 @@
 import express from 'express';
-import { bulkCreateLogs, getAlerts, getEndpoints, getLogs, getOps, getOverview, getServices, getTraces, getWorkspaces, rca } from '../services/repository.js';
+import { bulkCreateLogs, deleteEnvironmentLogs, getAlerts, getEndpoints, getLogs, getOps, getOverview, getServices, getTraces, getWorkspaces, rca } from '../services/repository.js';
 import { requireApiKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseLogBlock, parseUploadText, isNewLogStart } from '../services/logParser.js';
@@ -60,6 +60,12 @@ router.get('/:workspace/:environment/ops', asyncHandler(async (req,res)=>res.jso
 router.post('/:workspace/:environment/rca', asyncHandler(async (req,res)=>res.json({data:await rca(normalizeWorkspace(req),normalizeEnvironment(req),req.body?.query||'')})));
 
 router.post('/:workspace/:environment/logs', ingestLimit, requireApiKey, asyncHandler(async (req,res)=>{const payload=Array.isArray(req.body)?req.body:[req.body];const data=await bulkCreateLogs(normalizeWorkspace(req),normalizeEnvironment(req),payload);res.status(201).json({inserted:data.length,data});}));
+
+
+router.delete('/:workspace/:environment/logs', ingestLimit, asyncHandler(async (req,res)=>{
+  const data = await deleteEnvironmentLogs(normalizeWorkspace(req), normalizeEnvironment(req));
+  res.json({data});
+}));
 
 router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(async (req,res)=>{
   let bytes = 0, inserted = 0, parsed = 0, rejected = 0, batch = [];
