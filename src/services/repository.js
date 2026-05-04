@@ -24,7 +24,7 @@ function fallbackLogs(environmentName, f={}) {
   const page = Math.max(Number(f.page || 1), 1);
   const pageSize = Math.min(Math.max(Number(f.limit || f.page_size || 50), 10), 500);
   let rows = fallback.logs.filter(l => l.environment_name === environmentName);
-  if (f.range && f.range !== 'custom' && !f.from && !f.to) rows = rows.filter(l => matchesRange(l.timestamp, f.range));
+  if (f.range && f.range !== 'custom' && f.range !== 'all' && !f.from && !f.to) rows = rows.filter(l => matchesRange(l.timestamp, f.range));
   if (f.from) rows = rows.filter(l => new Date(l.timestamp) >= new Date(f.from));
   if (f.to) rows = rows.filter(l => new Date(l.timestamp) <= new Date(f.to));
   if (f.severity) rows = rows.filter(l => l.severity === String(f.severity).toUpperCase());
@@ -214,7 +214,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   if (f.trace_id) add(`le.trace_id ILIKE '%' || ? || '%'`, String(f.trace_id));
   if (f.from) add('le.timestamp >= ?', f.from);
   if (f.to) add('le.timestamp <= ?', f.to);
-  if (!f.from && !f.to && f.range && f.range !== 'custom') {
+  if (!f.from && !f.to && f.range && f.range !== 'custom' && f.range !== 'all') {
     const interval = f.range === '1h' ? '1 hour' : f.range === '7d' ? '7 days' : f.range === '30d' ? '30 days' : '24 hours';
     where.push(`le.timestamp >= now() - interval '${interval}'`);
   }
