@@ -15,8 +15,18 @@ function normalizeSeverity(v) {
 function normalizePath(p) {
   if (!p) return null;
   let s = String(p).trim().replace(/\\+/g, '/').replace(/\/+/g, '/');
+  s = s.split(':')[0];
   if (!s.startsWith('/')) s = '/' + s;
   return s.replace(/\/$/, '') || '/';
+}
+function normalizeServiceName(v) {
+  if (!v) return null;
+  let s = String(v).trim().replace(/[\]\)]*$/, '');
+  if (!s || s === '-' || s === 'null') return null;
+  // Mule XML files are implementation files, not services.
+  if (/\.xml$/i.test(s)) return null;
+  if (s.endsWith('-config')) s = s.slice(0, -7);
+  return s || null;
 }
 function normalizeTimestamp(ts) {
   if (!ts) return null;
@@ -27,7 +37,17 @@ function normalizeTimestamp(ts) {
 }
 function inferMethod(text) { return (String(text).match(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/i) || [])[1]?.toUpperCase() || null; }
 function inferPath(text) { return normalizePath((String(text).match(/(?:path|endpoint|uri|url|requestPath|route)[=: ]+["']?(\/[A-Za-z0-9._~:\/?#[\]@!$&'()*+,;=%-]+)/i) || String(text).match(/\s(\/[A-Za-z0-9._~:\/?#[\]@!$&'()*+,;=%-]+)(?:\s|$)/) || [])[1]); }
-function inferService(text) { return (String(text).match(/(?:service|api|application|app|logger|mule_app)[=: ]+["']?([A-Za-z0-9._-]+)/i) || String(text).match(/\[([A-Za-z0-9._-]+-api)\]/i) || [])[1] || null; }
+function inferService(text) {
+  const raw = String(text || '');
+  const candidates = [
+    (raw.match(/\[([A-Za-z0-9._-]+-api)\]/i) || [])[1],
+    (raw.match(/@\s*([A-Za-z0-9._-]+):[A-Za-z0-9._-]+\.xml:/i) || [])[1],
+    (raw.match(/at\s+(?:get|post|put|patch|delete|head|options):[^:]+:([A-Za-z0-9._-]+)-config/i) || [])[1],
+    (raw.match(/at\s+([A-Za-z0-9._-]+-api)-main/i) || [])[1],
+    (raw.match(/(?:service|api_name|apiName|application|mule_app)[=: ]+["']?([A-Za-z0-9._-]+)/i) || [])[1]
+  ];
+  return normalizeServiceName(candidates.find(Boolean));
+}
 function inferTrace(text) { return (String(text).match(/(?:trace[_-]?id|correlation[_-]?id|event[_-]?id|event|transaction[_-]?id|request[_-]?id)[:=\s]+["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
 function inferTxn(text) { return (String(text).match(/"?transactionId"?\s*[:=]\s*"?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
 function messageAfterLogger(block) {
@@ -57,6 +77,7 @@ export function parseMuleBlock(block) {
   const head = raw.match(new RegExp(`^${SEVERITY}\\s+(\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}[,.]\\d{3})`, 'i'));
   if (!head) return null;
   const route = raw.match(/\[([A-Za-z0-9._-]+)\]\.(get|post|put|patch|delete|head|options):([^:\]\s]+)/i);
+  const flowRoute = raw.match(/(?:^|[\s(])(get|post|put|patch|delete|head|options):(\\[^:\s)]+):([A-Za-z0-9._-]+)-config/i);
   const processor = raw.match(/\[processor:\s*([^;\]]+)/i);
   const json = extractJsonFragments(raw)[0] || null;
   const msg = messageAfterLogger(raw);
@@ -68,9 +89,9 @@ export function parseMuleBlock(block) {
     parser: 'mule-runtime',
     timestamp: normalizeTimestamp(head[2]),
     severity: effectiveSeverity,
-    service_name: route?.[1] || inferService(raw),
-    method: route?.[2]?.toUpperCase() || inferMethod(raw),
-    path: normalizePath(route?.[3]) || inferPath(raw),
+    service_name: normalizeServiceName(route?.[1]) || normalizeServiceName(flowRoute?.[3]) || inferService(raw),
+    method: route?.[2]?.toUpperCase() || flowRoute?.[1]?.toUpperCase() || inferMethod(raw),
+    path: normalizePath(route?.[3]) || normalizePath(flowRoute?.[2]) || inferPath(raw),
     trace_id: event || inferTrace(raw),
     transaction_id: inferTxn(raw),
     processor: processor?.[1] || null,
@@ -92,7 +113,7 @@ export function extractFromObject(p) {
     timestamp: normalizeTimestamp(p.timestamp || p.time || p['@timestamp'] || p.datetime || p.date),
     severity: normalizeSeverity(p.severity || p.level || p.log_level || p.status || 'INFO'),
     trace_id: trace || inferTrace(text),
-    service_name: service || inferService(text),
+    service_name: normalizeServiceName(service) || inferService(text),
     method: method ? String(method).toUpperCase() : inferMethod(text),
     path: normalizePath(path) || inferPath(text),
     transaction_id: inferTxn(text),
@@ -155,5 +176,31 @@ export function parseUploadText(text) {
     }
   }
   if (current.trim()) rows.push(parseLogBlock(current));
-  return rows.filter(Boolean);
+  return postProcessRecords(rows.filter(Boolean));
+}
+
+function postProcessRecords(records) {
+  const byTrace = new Map();
+  for (const r of records) {
+    r.service_name = normalizeServiceName(r.service_name);
+    if (r.trace_id && r.service_name) {
+      const existing = byTrace.get(r.trace_id) || {};
+      byTrace.set(r.trace_id, {
+        service_name: existing.service_name || r.service_name,
+        method: existing.method || r.method,
+        path: existing.path || r.path
+      });
+    }
+  }
+  for (const r of records) {
+    if (r.trace_id) {
+      const e = byTrace.get(r.trace_id);
+      if (e) {
+        r.service_name = r.service_name || e.service_name;
+        r.method = r.method || e.method;
+        r.path = r.path || e.path;
+      }
+    }
+  }
+  return records;
 }

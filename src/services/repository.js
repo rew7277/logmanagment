@@ -118,7 +118,7 @@ export async function getOverview(workspaceSlug, environmentName) {
     query(
       `SELECT count(*)::int logs_ingested,
               COALESCE(100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) error_rate
-       FROM log_events WHERE environment_id=$1 AND timestamp >= now() - interval '24 hours'`,
+       FROM log_events WHERE environment_id=$1`,
       [env.id]
     ),
     query(`SELECT count(*)::int active_alerts FROM alerts WHERE environment_id=$1 AND status='open'`, [env.id]),
@@ -157,7 +157,7 @@ export async function getServices(workspaceSlug, environmentName) {
             COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
             COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms
      FROM services s
-     LEFT JOIN log_events le ON le.service_id=s.id AND le.timestamp >= now() - interval '24 hours'
+     LEFT JOIN log_events le ON le.service_id=s.id
      LEFT JOIN traces t ON t.service_id=s.id AND t.started_at >= now() - interval '24 hours'
      WHERE s.environment_id=$1
      GROUP BY s.id
@@ -173,13 +173,13 @@ export async function getEndpoints(workspaceSlug, environmentName) {
   if (!hasDatabase) return fallbackEndpoints(environmentName);
   const result = await query(
     `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
-            count(le.*)::int calls_per_hour,
+            count(le.*)::int calls_total,
             COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
             COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms,
             COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ((t.meta->>'backend_ms')::int)),0)::int backend_ms
      FROM endpoints ep
      JOIN services s ON s.id=ep.service_id
-     LEFT JOIN log_events le ON le.endpoint_id=ep.id AND le.timestamp >= now() - interval '1 hour'
+     LEFT JOIN log_events le ON le.endpoint_id=ep.id
      LEFT JOIN traces t ON t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours'
      WHERE s.environment_id=$1
      GROUP BY ep.id, s.name
@@ -343,7 +343,7 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
     const serviceCache = new Map();
     const endpointCache = new Map();
 
-    const services = [...new Set(logs.map(l => l.service_name || l.service).filter(Boolean))];
+    const services = [...new Set(logs.map(l => l.service_name || l.service).filter(v => v && !String(v).toLowerCase().endsWith('.xml')))];
     for (const name of services) {
       const svc = await client.query(
         `INSERT INTO services(environment_id, name, status)
@@ -357,7 +357,8 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
 
     const endpointKeys = [];
     for (const log of logs) {
-      const serviceName = log.service_name || log.service;
+      const serviceName = (log.service_name || log.service);
+      if (serviceName && String(serviceName).toLowerCase().endsWith('.xml')) continue;
       const serviceId = serviceCache.get(serviceName);
       const method = log.method ? String(log.method).toUpperCase() : null;
       const logPath = log.path || log.endpoint || null;
@@ -383,7 +384,8 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
     const values = [];
     const placeholders = [];
     logs.forEach((payload, idx) => {
-      const serviceName = payload.service_name || payload.service || null;
+      const rawServiceName = payload.service_name || payload.service || null;
+      const serviceName = rawServiceName && !String(rawServiceName).toLowerCase().endsWith('.xml') ? rawServiceName : null;
       const serviceId = serviceCache.get(serviceName) || null;
       const method = payload.method ? String(payload.method).toUpperCase() : null;
       const logPath = payload.path || payload.endpoint || null;
