@@ -23,10 +23,28 @@ function normalizeServiceName(v) {
   if (!v) return null;
   let s = String(v).trim().replace(/[\]\)]*$/, '');
   if (!s || s === '-' || s === 'null') return null;
-  // Mule XML files are implementation files, not services.
-  if (/\.xml$/i.test(s)) return null;
+  // Mule XML files, flow names and processor implementation names are NOT services.
+  if (/\.xml(?::\d+)?$/i.test(s)) return null;
+  if (/subflow|processor|flowstack/i.test(s)) return null;
   if (s.endsWith('-config')) s = s.slice(0, -7);
   return s || null;
+}
+
+function strictMuleService(raw) {
+  const text = String(raw || '');
+  // 1) Prefer the application name inside Mule runtime brackets: [s-gupshup-api].get:\path
+  const runtimeApp = (text.match(/\[([A-Za-z0-9._-]+-api)\]\.(?:get|post|put|patch|delete|head|options):/i) || [])[1];
+  if (runtimeApp) return normalizeServiceName(runtimeApp);
+  // 2) FlowStack format: @ s-gupshup-api:generate-otp.xml:36
+  const flowStackApp = (text.match(/@\s*([A-Za-z0-9._-]+-api)\s*:[A-Za-z0-9._-]+\.xml(?::\d+)?/i) || [])[1];
+  if (flowStackApp) return normalizeServiceName(flowStackApp);
+  // 3) Main flow format: s-gupshup-api-main(...)
+  const mainFlowApp = (text.match(/\b([A-Za-z0-9._-]+-api)-main\b/i) || [])[1];
+  if (mainFlowApp) return normalizeServiceName(mainFlowApp);
+  // 4) Config format: s-gupshup-api-config
+  const configApp = (text.match(/\b([A-Za-z0-9._-]+-api)-config\b/i) || [])[1];
+  if (configApp) return normalizeServiceName(configApp);
+  return null;
 }
 function normalizeTimestamp(ts) {
   if (!ts) return null;
@@ -39,14 +57,10 @@ function inferMethod(text) { return (String(text).match(/\b(GET|POST|PUT|PATCH|D
 function inferPath(text) { return normalizePath((String(text).match(/(?:path|endpoint|uri|url|requestPath|route)[=: ]+["']?(\/[A-Za-z0-9._~:\/?#[\]@!$&'()*+,;=%-]+)/i) || String(text).match(/\s(\/[A-Za-z0-9._~:\/?#[\]@!$&'()*+,;=%-]+)(?:\s|$)/) || [])[1]); }
 function inferService(text) {
   const raw = String(text || '');
-  const candidates = [
-    (raw.match(/\[([A-Za-z0-9._-]+-api)\]/i) || [])[1],
-    (raw.match(/@\s*([A-Za-z0-9._-]+):[A-Za-z0-9._-]+\.xml:/i) || [])[1],
-    (raw.match(/at\s+(?:get|post|put|patch|delete|head|options):[^:]+:([A-Za-z0-9._-]+)-config/i) || [])[1],
-    (raw.match(/at\s+([A-Za-z0-9._-]+-api)-main/i) || [])[1],
-    (raw.match(/(?:service|api_name|apiName|application|mule_app)[=: ]+["']?([A-Za-z0-9._-]+)/i) || [])[1]
-  ];
-  return normalizeServiceName(candidates.find(Boolean));
+  const strict = strictMuleService(raw);
+  if (strict) return strict;
+  const generic = (raw.match(/(?:service|api_name|apiName|application|mule_app)[=: ]+["']?([A-Za-z0-9._-]+)/i) || [])[1];
+  return normalizeServiceName(generic);
 }
 function inferTrace(text) { return (String(text).match(/(?:trace[_-]?id|correlation[_-]?id|event[_-]?id|event|transaction[_-]?id|request[_-]?id)[:=\s]+["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
 function inferTxn(text) { return (String(text).match(/"?transactionId"?\s*[:=]\s*"?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
@@ -89,7 +103,7 @@ export function parseMuleBlock(block) {
     parser: 'mule-runtime',
     timestamp: normalizeTimestamp(head[2]),
     severity: effectiveSeverity,
-    service_name: normalizeServiceName(route?.[1]) || normalizeServiceName(flowRoute?.[3]) || inferService(raw),
+    service_name: strictMuleService(raw) || normalizeServiceName(route?.[1]) || normalizeServiceName(flowRoute?.[3]) || inferService(raw),
     method: route?.[2]?.toUpperCase() || flowRoute?.[1]?.toUpperCase() || inferMethod(raw),
     path: normalizePath(route?.[3]) || normalizePath(flowRoute?.[2]) || inferPath(raw),
     trace_id: event || inferTrace(raw),
@@ -176,7 +190,20 @@ export function parseUploadText(text) {
     }
   }
   if (current.trim()) rows.push(parseLogBlock(current));
-  return postProcessRecords(rows.filter(Boolean));
+  return sanitizeParsedRecords(rows.filter(Boolean));
+}
+
+export function sanitizeParsedRecords(records) {
+  const clean = (records || []).filter(Boolean);
+  for (const r of clean) {
+    const rawText = typeof r.raw === 'string' ? r.raw : JSON.stringify(r.raw || {}) + '\n' + String(r.message || '');
+    const strict = strictMuleService(rawText);
+    const normalized = normalizeServiceName(r.service_name || r.service);
+    r.service_name = strict || normalized || null;
+    if (!r.method) r.method = inferMethod(rawText);
+    if (!r.path) r.path = inferPath(rawText);
+  }
+  return postProcessRecords(clean);
 }
 
 function postProcessRecords(records) {

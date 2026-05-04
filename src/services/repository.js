@@ -1,4 +1,5 @@
 import { query, hasDatabase, withTransaction } from '../db/pool.js';
+import { sanitizeParsedRecords } from './logParser.js';
 
 const fallback = {
   workspaces: [{ id: 'demo-workspace', name: 'FSBL Production Ops', slug: 'fsbl-prod-ops' }],
@@ -122,9 +123,9 @@ export async function getOverview(workspaceSlug, environmentName) {
       [env.id]
     ),
     query(`SELECT count(*)::int active_alerts FROM alerts WHERE environment_id=$1 AND status='open'`, [env.id]),
-    query(`SELECT count(*)::int services FROM services WHERE environment_id=$1`, [env.id]),
+    query(`SELECT count(*)::int services FROM services WHERE environment_id=$1 AND name !~* '\\.xml(:[0-9]+)?$'`, [env.id]),
     query(
-      `SELECT count(*)::int endpoints FROM endpoints ep JOIN services s ON s.id=ep.service_id WHERE s.environment_id=$1`,
+      `SELECT count(*)::int endpoints FROM endpoints ep JOIN services s ON s.id=ep.service_id WHERE s.environment_id=$1 AND s.name !~* '\\.xml(:[0-9]+)?$'`,
       [env.id]
     ),
     query(
@@ -159,7 +160,7 @@ export async function getServices(workspaceSlug, environmentName) {
      FROM services s
      LEFT JOIN log_events le ON le.service_id=s.id
      LEFT JOIN traces t ON t.service_id=s.id AND t.started_at >= now() - interval '24 hours'
-     WHERE s.environment_id=$1
+     WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'
      GROUP BY s.id
      ORDER BY s.health_score ASC, s.name ASC`,
     [env.id]
@@ -181,7 +182,7 @@ export async function getEndpoints(workspaceSlug, environmentName) {
      JOIN services s ON s.id=ep.service_id
      LEFT JOIN log_events le ON le.endpoint_id=ep.id
      LEFT JOIN traces t ON t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours'
-     WHERE s.environment_id=$1
+     WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'
      GROUP BY ep.id, s.name
      ORDER BY s.name, ep.method, ep.path`,
     [env.id]
@@ -234,7 +235,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
     ),
     query(
       `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
-              s.name service_name, ep.method, ep.path
+              CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
        FROM log_events le
        LEFT JOIN services s ON s.id=le.service_id
        LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
@@ -316,6 +317,8 @@ export async function createLog(workspaceSlug, environmentName, payload) {
  */
 export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
   if (!Array.isArray(logs) || logs.length === 0) return [];
+  logs = sanitizeParsedRecords(logs).filter(l => l && (l.message || l.raw));
+  if (!logs.length) return [];
   if (!hasDatabase) {
     const created = logs.map((l, i) => {
       const row = {
@@ -446,7 +449,7 @@ export async function getTraces(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) return [];
   const result = await query(
-    `SELECT t.*, s.name service_name, ep.method, ep.path
+    `SELECT t.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
      FROM traces t
      LEFT JOIN services s ON s.id=t.service_id
      LEFT JOIN endpoints ep ON ep.id=t.endpoint_id
@@ -463,7 +466,7 @@ export async function getAlerts(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) return [];
   const result = await query(
-    `SELECT a.*, s.name service_name, ep.method, ep.path
+    `SELECT a.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
      FROM alerts a
      LEFT JOIN services s ON s.id=a.service_id
      LEFT JOIN endpoints ep ON ep.id=a.endpoint_id
