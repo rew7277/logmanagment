@@ -18,25 +18,45 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
+const bootState = {
+  startedAt: new Date().toISOString(),
+  database: hasDatabase ? 'configured' : 'not_configured',
+  migration: 'pending',
+  seed: 'pending',
+  lastError: null
+};
+
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(compression());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: process.env.JSON_LIMIT || '5mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h' }));
 
-app.get('/health', async (_req, res) => {
-  let database = 'not_configured';
-  try {
-    if (hasDatabase) {
-      await query('SELECT 1');
-      database = 'connected';
-    }
-  } catch (error) {
-    database = `error: ${error.message}`;
+// Railway healthcheck must be fast and must not wait for PostgreSQL.
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: 'observex',
+    uptime_seconds: Math.round(process.uptime()),
+    boot: bootState,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Readiness is stricter and can be used manually to validate PostgreSQL.
+app.get('/ready', async (_req, res) => {
+  if (!hasDatabase) {
+    return res.status(200).json({ ok: true, database: 'not_configured', message: 'App is running without PostgreSQL. Add DATABASE_URL to enable persistence.' });
   }
-  res.json({ ok: true, service: 'observex', database, timestamp: new Date().toISOString() });
+  try {
+    await query('SELECT 1');
+    return res.json({ ok: true, database: 'connected', boot: bootState });
+  } catch (error) {
+    return res.status(503).json({ ok: false, database: 'error', error: error.message, boot: bootState });
+  }
 });
 
 app.use('/api', apiRoutes);
@@ -50,19 +70,45 @@ app.use((error, _req, res, _next) => {
   res.status(error.status || 500).json({ error: error.message || 'Internal server error' });
 });
 
-async function boot() {
-  if (process.env.AUTO_MIGRATE !== 'false') {
-    await migrate();
+async function runDatabaseStartupTasks() {
+  if (!hasDatabase) {
+    bootState.database = 'not_configured';
+    bootState.migration = 'skipped';
+    bootState.seed = 'skipped';
+    console.warn('[db] DATABASE_URL missing. Running UI/API with in-memory demo fallback.');
+    return;
   }
-  if (process.env.SEED_DEMO_DATA !== 'false') {
-    await seed();
+
+  try {
+    bootState.database = 'connecting';
+    await query('SELECT 1');
+    bootState.database = 'connected';
+
+    if (process.env.AUTO_MIGRATE !== 'false') {
+      bootState.migration = 'running';
+      await migrate();
+      bootState.migration = 'completed';
+    } else {
+      bootState.migration = 'disabled';
+    }
+
+    if (process.env.SEED_DEMO_DATA !== 'false') {
+      bootState.seed = 'running';
+      await seed();
+      bootState.seed = 'completed';
+    } else {
+      bootState.seed = 'disabled';
+    }
+  } catch (error) {
+    bootState.lastError = error.message;
+    bootState.database = bootState.database === 'connecting' ? 'connection_failed' : bootState.database;
+    if (bootState.migration === 'running') bootState.migration = 'failed';
+    if (bootState.seed === 'running') bootState.seed = 'failed';
+    console.error('[db] startup task failed. App remains online; check /ready for details.', error);
   }
-  app.listen(port, () => {
-    console.log(`[server] ObserveX running on port ${port}`);
-  });
 }
 
-boot().catch((error) => {
-  console.error('[server] failed to start', error);
-  process.exit(1);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`[server] ObserveX running on 0.0.0.0:${port}`);
+  runDatabaseStartupTasks();
 });
