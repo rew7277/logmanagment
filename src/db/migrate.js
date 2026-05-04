@@ -119,6 +119,8 @@ const statements = [
     meta JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  `ALTER TABLE log_events ADD COLUMN IF NOT EXISTS upload_id UUID REFERENCES ingestion_jobs(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_logs_upload ON log_events(upload_id) WHERE upload_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_ingestion_env ON ingestion_jobs(environment_id, status)`,
   `CREATE TABLE IF NOT EXISTS security_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

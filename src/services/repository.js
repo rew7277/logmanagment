@@ -211,6 +211,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   if (f.severity) add('le.severity = ?', String(f.severity).toUpperCase());
   if (f.service) add(`s.name ILIKE '%' || ? || '%'`, String(f.service));
   if (f.path) add(`ep.path ILIKE '%' || ? || '%'`, String(f.path));
+  if (f.upload_id) add('le.upload_id = ?', String(f.upload_id));
   if (f.trace_id) {
     const base = values.length;
     values.push(String(f.trace_id), String(f.trace_id), String(f.trace_id), String(f.trace_id));
@@ -238,7 +239,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
       values
     ),
     query(
-      `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
+      `SELECT le.id, le.upload_id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
               CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
        FROM log_events le
        LEFT JOIN services s ON s.id=le.service_id
@@ -345,7 +346,7 @@ export async function createLog(workspaceSlug, environmentName, payload) {
  * times (one per log). Now we look up the environment ONCE and wrap all inserts
  * in a single SERIALIZABLE transaction so bulk uploads are atomic.
  */
-export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
+export async function bulkCreateLogs(workspaceSlug, environmentName, logs, options = {}) {
   if (!Array.isArray(logs) || logs.length === 0) return [];
   logs = sanitizeParsedRecords(logs).filter(l => l && (l.message || l.raw));
   if (!logs.length) return [];
@@ -361,12 +362,13 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
         method: l.method ? String(l.method).toUpperCase() : null,
         path: l.path || l.endpoint || null,
         message: l.message || String(l.raw || ''),
-        raw: l.raw || l
+        raw: l.raw || l,
+        upload_id: options.uploadId || null
       };
       return row;
     });
     fallback.logs.push(...created);
-    fallback.ingestion.unshift({ source_type:'UPLOAD', source_name:'browser/API upload', status:'healthy', accepted_count:created.length, rejected_count:0, parser_errors:0, created_at:new Date().toISOString() });
+    if (!options.uploadId) fallback.ingestion.unshift({ id:`local-upload-${Date.now()}`, source_type:'UPLOAD', source_name:options.sourceName || 'browser/API upload', status:'healthy', accepted_count:created.length, rejected_count:0, parser_errors:0, meta:{bytes:options.bytes||0}, created_at:new Date().toISOString() });
     return created;
   }
   const env = await getEnvironment(workspaceSlug, environmentName);
@@ -423,11 +425,11 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
       const method = payload.method ? String(payload.method).toUpperCase() : null;
       const logPath = payload.path || payload.endpoint || null;
       const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
-      const base = idx * 10;
-      placeholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},COALESCE($${base+6}, now()),$${base+7},$${base+8},$${base+9},$${base+10})`);
+      const base = idx * 11;
+      placeholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},COALESCE($${base+7}, now()),$${base+8},$${base+9},$${base+10},$${base+11})`);
       values.push(
         env.org_id, env.workspace_id, env.id,
-        serviceId, endpointId,
+        serviceId, endpointId, options.uploadId || null,
         payload.timestamp || null,
         String(payload.severity || 'INFO').toUpperCase(),
         payload.trace_id || null,
@@ -437,7 +439,7 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
     });
 
     const result = await client.query(
-      `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, timestamp, severity, trace_id, message, raw)
+      `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, upload_id, timestamp, severity, trace_id, message, raw)
        VALUES ${placeholders.join(',')}
        RETURNING id, timestamp, severity, trace_id, message`,
       values
@@ -498,16 +500,130 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
       );
     }
 
-    await client.query(
-      `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)
-       VALUES($1,'UPLOAD','browser/API upload','healthy',now(),$2,0,0,$3)`,
-      [env.id, result.rowCount, JSON.stringify({ batch_size: logs.length })]
-    );
+    if (!options.uploadId) {
+      await client.query(
+        `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)
+         VALUES($1,'UPLOAD',$2,'completed',now(),$3,0,0,$4)`,
+        [env.id, options.sourceName || 'browser/API upload', result.rowCount, JSON.stringify({ batch_size: logs.length, bytes: options.bytes || 0 })]
+      );
+    }
 
     return result.rows;
   });
 }
 
+
+
+export async function createUploadRecord(workspaceSlug, environmentName, { fileName='upload.log', bytes=0 } = {}) {
+  if (!hasDatabase) {
+    const rec = { id:`local-upload-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, source_type:'UPLOAD', source_name:fileName, status:'receiving', accepted_count:0, rejected_count:0, parser_errors:0, meta:{bytes}, created_at:new Date().toISOString(), last_received_at:new Date().toISOString() };
+    fallback.ingestion.unshift(rec);
+    return rec;
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const result = await query(
+    `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)
+     VALUES($1,'UPLOAD',$2,'receiving',now(),0,0,0,$3)
+     RETURNING *`,
+    [env.id, fileName, JSON.stringify({ bytes, stage:'Receiving file' })]
+  );
+  return result.rows[0];
+}
+
+export async function updateUploadRecord(workspaceSlug, environmentName, uploadId, patch = {}) {
+  if (!uploadId) return null;
+  if (!hasDatabase) {
+    const rec = fallback.ingestion.find(x => x.id === uploadId);
+    if (rec) Object.assign(rec, patch, { meta: { ...(rec.meta||{}), ...(patch.meta||{}) }, last_received_at:new Date().toISOString() });
+    return rec || null;
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const current = await query(`SELECT meta FROM ingestion_jobs WHERE id=$1 AND environment_id=$2`, [uploadId, env.id]);
+  if (!current.rows[0]) return null;
+  const meta = { ...(current.rows[0].meta || {}), ...(patch.meta || {}) };
+  const result = await query(
+    `UPDATE ingestion_jobs SET
+       status=COALESCE($3,status),
+       accepted_count=COALESCE($4,accepted_count),
+       rejected_count=COALESCE($5,rejected_count),
+       parser_errors=COALESCE($6,parser_errors),
+       last_received_at=now(),
+       meta=$7::jsonb
+     WHERE id=$1 AND environment_id=$2
+     RETURNING *`,
+    [uploadId, env.id, patch.status || null, patch.accepted_count ?? null, patch.rejected_count ?? null, patch.parser_errors ?? null, JSON.stringify(meta)]
+  );
+  return result.rows[0] || null;
+}
+
+export async function getUploadHistory(workspaceSlug, environmentName) {
+  if (!hasDatabase) {
+    return fallback.ingestion.filter(x => x.source_type === 'UPLOAD').map(x => ({
+      ...x,
+      file_name: x.source_name,
+      file_size: x.meta?.bytes || 0,
+      total_logs: x.accepted_count || 0,
+      environment: environmentName
+    }));
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const result = await query(
+    `SELECT ij.id, ij.source_name AS file_name, ij.status, ij.accepted_count AS total_logs,
+            ij.rejected_count, ij.parser_errors, ij.created_at, ij.last_received_at,
+            COALESCE((ij.meta->>'bytes')::bigint,0) AS file_size,
+            ij.meta,
+            count(le.id)::int AS stored_logs
+     FROM ingestion_jobs ij
+     LEFT JOIN log_events le ON le.upload_id=ij.id
+     WHERE ij.environment_id=$1 AND ij.source_type='UPLOAD'
+     GROUP BY ij.id
+     ORDER BY ij.created_at DESC
+     LIMIT 200`,
+    [env.id]
+  );
+  return result.rows;
+}
+
+export async function deleteUploadHistory(workspaceSlug, environmentName, uploadIds = []) {
+  const ids = Array.isArray(uploadIds) ? uploadIds.filter(Boolean) : [];
+  if (!ids.length) return { deleted_uploads: 0, deleted_logs: 0 };
+  if (!hasDatabase) {
+    const beforeLogs = fallback.logs.length;
+    fallback.logs = fallback.logs.filter(l => !ids.includes(l.upload_id));
+    const beforeUploads = fallback.ingestion.length;
+    fallback.ingestion = fallback.ingestion.filter(x => !ids.includes(x.id));
+    return { deleted_uploads: beforeUploads - fallback.ingestion.length, deleted_logs: beforeLogs - fallback.logs.length, mode:'memory' };
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  return withTransaction(async (client) => {
+    const delLogs = await client.query(`DELETE FROM log_events WHERE environment_id=$1 AND upload_id = ANY($2::uuid[])`, [env.id, ids]);
+    const delUploads = await client.query(`DELETE FROM ingestion_jobs WHERE environment_id=$1 AND id = ANY($2::uuid[]) AND source_type='UPLOAD'`, [env.id, ids]);
+    await client.query(`DELETE FROM traces t WHERE t.environment_id=$1 AND NOT EXISTS (SELECT 1 FROM log_events le WHERE le.environment_id=$1 AND le.trace_id=t.trace_id)`, [env.id]);
+    await client.query(`DELETE FROM endpoints ep USING services s WHERE ep.service_id=s.id AND s.environment_id=$1 AND NOT EXISTS (SELECT 1 FROM log_events le WHERE le.endpoint_id=ep.id)`, [env.id]);
+    await client.query(`DELETE FROM services s WHERE s.environment_id=$1 AND NOT EXISTS (SELECT 1 FROM log_events le WHERE le.service_id=s.id) AND NOT EXISTS (SELECT 1 FROM endpoints ep WHERE ep.service_id=s.id)`, [env.id]);
+    return { deleted_uploads: delUploads.rowCount || 0, deleted_logs: delLogs.rowCount || 0, environment: environmentName };
+  });
+}
+
+export async function deleteAllUploadHistory(workspaceSlug, environmentName) {
+  if (!hasDatabase) {
+    const beforeLogs = fallback.logs.length, beforeUploads = fallback.ingestion.length;
+    fallback.logs = fallback.logs.filter(l => l.environment_name !== environmentName);
+    fallback.ingestion = fallback.ingestion.filter(x => x.source_type !== 'UPLOAD');
+    return { deleted_uploads: beforeUploads - fallback.ingestion.length, deleted_logs: beforeLogs - fallback.logs.length, mode:'memory' };
+  }
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  return withTransaction(async (client) => {
+    const ids = await client.query(`SELECT id FROM ingestion_jobs WHERE environment_id=$1 AND source_type='UPLOAD'`, [env.id]);
+    const delLogs = await client.query(`DELETE FROM log_events WHERE environment_id=$1 AND upload_id IN (SELECT id FROM ingestion_jobs WHERE environment_id=$1 AND source_type='UPLOAD')`, [env.id]);
+    await client.query(`DELETE FROM ingestion_jobs WHERE environment_id=$1 AND source_type='UPLOAD'`, [env.id]);
+    await client.query(`DELETE FROM traces WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM alerts WHERE environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM endpoints ep USING services s WHERE ep.service_id=s.id AND s.environment_id=$1`, [env.id]);
+    await client.query(`DELETE FROM services WHERE environment_id=$1`, [env.id]);
+    return { deleted_uploads: ids.rowCount || 0, deleted_logs: delLogs.rowCount || 0, environment: environmentName };
+  });
+}
 
 export async function deleteEnvironmentLogs(workspaceSlug, environmentName) {
   if (!hasDatabase) {

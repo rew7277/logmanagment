@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { bulkCreateLogs, deleteEnvironmentLogs, getAlerts, getEndpoints, getLogs, getOps, getOverview, getServices, getTraces, getWorkspaces, rca } from '../services/repository.js';
+import { bulkCreateLogs, createUploadRecord, deleteAllUploadHistory, deleteEnvironmentLogs, deleteUploadHistory, getAlerts, getEndpoints, getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory, getWorkspaces, rca, updateUploadRecord } from '../services/repository.js';
 import { requireApiKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseLogBlock, parseUploadText, isNewLogStart } from '../services/logParser.js';
@@ -38,7 +38,7 @@ async function processUploadedFile(job, filePath, workspace, environment) {
   async function flush(){
     if(!batch.length) return;
     updateJob(job, { status:'processing', stage:`Indexing ${batch.length} parsed events` });
-    const created = await bulkCreateLogs(workspace, environment, batch);
+    const created = await bulkCreateLogs(workspace, environment, batch, { uploadId: job.uploadRecordId, sourceName: job.fileName, bytes: job.bytes });
     job.inserted += created.length;
     batch = [];
     updateJob(job, { stage:'Parsing & indexing', status:'processing' });
@@ -69,8 +69,10 @@ async function processUploadedFile(job, filePath, workspace, environment) {
     else await rawParser.finish();
     await flush();
     if (!job.parsed) throw new Error('No parseable log events found. Supported: Mule runtime logs, JSON/JSONL, and generic timestamped logs.');
+    await updateUploadRecord(workspace, environment, job.uploadRecordId, { status:'completed', accepted_count: job.inserted, rejected_count: job.rejected, parser_errors: 0, meta:{ bytes: job.bytes, stage:'Completed', speed: job.speed } });
     updateJob(job, { status:'completed', stage:'Completed' });
   } catch (err) {
+    await updateUploadRecord(workspace, environment, job.uploadRecordId, { status:'failed', accepted_count: job.inserted || 0, rejected_count: job.rejected || 0, parser_errors: 1, meta:{ bytes: job.bytes, stage:'Failed', error: err.message || String(err), speed: job.speed || 0 } }).catch(()=>{});
     updateJob(job, { status:'failed', stage:'Failed', error: err.message || String(err) });
   } finally {
     fs.promises.rm(filePath, { force:true }).catch(()=>{});
@@ -120,7 +122,7 @@ router.get('/workspaces', asyncHandler(async (_req,res)=>res.json({data:await ge
 router.get('/:workspace/:environment/overview', asyncHandler(async (req,res)=>{const data=await getOverview(normalizeWorkspace(req),normalizeEnvironment(req));res.json({data});}));
 router.get('/:workspace/:environment/services', asyncHandler(async (req,res)=>res.json({data:await getServices(normalizeWorkspace(req),normalizeEnvironment(req))})));
 router.get('/:workspace/:environment/endpoints', asyncHandler(async (req,res)=>res.json({data:await getEndpoints(normalizeWorkspace(req),normalizeEnvironment(req))})));
-router.get('/:workspace/:environment/logs', asyncHandler(async (req,res)=>{const limit=Math.min(Number(req.query.limit||50),500);const page=Math.max(Number(req.query.page||1),1);res.json({data:await getLogs(normalizeWorkspace(req),normalizeEnvironment(req),limit,{q:req.query.q,severity:req.query.severity,service:req.query.service,path:req.query.path,trace_id:req.query.trace_id,range:req.query.range,from:req.query.from,to:req.query.to,page})});}));
+router.get('/:workspace/:environment/logs', asyncHandler(async (req,res)=>{const limit=Math.min(Number(req.query.limit||50),500);const page=Math.max(Number(req.query.page||1),1);res.json({data:await getLogs(normalizeWorkspace(req),normalizeEnvironment(req),limit,{q:req.query.q,severity:req.query.severity,service:req.query.service,path:req.query.path,trace_id:req.query.trace_id,range:req.query.range,from:req.query.from,to:req.query.to,upload_id:req.query.upload_id,page})});}));
 router.get('/:workspace/:environment/traces', asyncHandler(async (req,res)=>res.json({data:await getTraces(normalizeWorkspace(req),normalizeEnvironment(req))})));
 router.get('/:workspace/:environment/alerts', asyncHandler(async (req,res)=>res.json({data:await getAlerts(normalizeWorkspace(req),normalizeEnvironment(req))})));
 router.get('/:workspace/:environment/ops', asyncHandler(async (req,res)=>res.json({data:await getOps(normalizeWorkspace(req),normalizeEnvironment(req))})));
@@ -131,6 +133,22 @@ router.post('/:workspace/:environment/logs', ingestLimit, requireApiKey, asyncHa
 
 router.delete('/:workspace/:environment/logs', ingestLimit, asyncHandler(async (req,res)=>{
   const data = await deleteEnvironmentLogs(normalizeWorkspace(req), normalizeEnvironment(req));
+  res.json({data});
+}));
+
+
+router.get('/:workspace/:environment/uploads', asyncHandler(async (req,res)=>{
+  res.json({data:await getUploadHistory(normalizeWorkspace(req), normalizeEnvironment(req))});
+}));
+
+router.delete('/:workspace/:environment/uploads', ingestLimit, asyncHandler(async (req,res)=>{
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  const data = req.body?.all ? await deleteAllUploadHistory(normalizeWorkspace(req), normalizeEnvironment(req)) : await deleteUploadHistory(normalizeWorkspace(req), normalizeEnvironment(req), ids);
+  res.json({data});
+}));
+
+router.delete('/:workspace/:environment/uploads/:uploadId', ingestLimit, asyncHandler(async (req,res)=>{
+  const data = await deleteUploadHistory(normalizeWorkspace(req), normalizeEnvironment(req), [req.params.uploadId]);
   res.json({data});
 }));
 
@@ -145,6 +163,8 @@ router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHand
   const environment = normalizeEnvironment(req);
   const fileName = String(req.headers['x-file-name'] || 'upload.log').slice(0, 160);
   const job = createJob(fileName);
+  const uploadRecord = await createUploadRecord(workspace, environment, { fileName, bytes: 0 });
+  job.uploadRecordId = uploadRecord?.id || null;
   const filePath = path.join(os.tmpdir(), `observex-${job.id}.log`);
   const out = fs.createWriteStream(filePath);
   let bytes = 0;
@@ -159,6 +179,8 @@ router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHand
     out.on('finish', resolve);
     req.pipe(out);
   });
+  job.bytes = bytes;
+  await updateUploadRecord(workspace, environment, job.uploadRecordId, { status:'queued', meta:{ bytes, stage:'Queued for parsing' } }).catch(()=>{});
   updateJob(job, { status:'queued', stage:'Queued for parsing', bytes });
   setImmediate(() => processUploadedFile(job, filePath, workspace, environment));
   res.status(202).json({data:job});
@@ -166,10 +188,12 @@ router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHand
 
 router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(async (req,res)=>{
   let bytes = 0, inserted = 0, parsed = 0, rejected = 0, batch = [];
+  const fileName = String(req.headers['x-file-name'] || 'browser/API upload').slice(0,160);
+  const uploadRecord = await createUploadRecord(normalizeWorkspace(req), normalizeEnvironment(req), { fileName, bytes: 0 });
   let mode = null, structuredBuffer = '';
   async function flush(){
     if(!batch.length) return;
-    const created = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), batch);
+    const created = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), batch, { uploadId: uploadRecord?.id, sourceName:fileName, bytes });
     inserted += created.length;
     batch = [];
   }
@@ -199,8 +223,9 @@ router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(as
   if (mode === 'structured') await acceptItems(parseUploadText(structuredBuffer));
   else await rawParser.finish();
   await flush();
-  if (!parsed) return res.status(400).json({error:'No parseable log events found. Supported: Mule runtime logs, JSON/JSONL, and generic timestamped logs.'});
-  res.status(201).json({inserted, parsed, rejected, bytes, parser:'mule+generic'});
+  if (!parsed) { await updateUploadRecord(normalizeWorkspace(req), normalizeEnvironment(req), uploadRecord?.id, { status:'failed', parser_errors:1, meta:{ bytes, error:'No parseable log events found' } }).catch(()=>{}); return res.status(400).json({error:'No parseable log events found. Supported: Mule runtime logs, JSON/JSONL, and generic timestamped logs.'}); }
+  await updateUploadRecord(normalizeWorkspace(req), normalizeEnvironment(req), uploadRecord?.id, { status:'completed', accepted_count: inserted, rejected_count: rejected, parser_errors:0, meta:{ bytes, stage:'Completed' } }).catch(()=>{});
+  res.status(201).json({inserted, parsed, rejected, bytes, upload_id: uploadRecord?.id, parser:'mule+generic'});
 }));
 
 
