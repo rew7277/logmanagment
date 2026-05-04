@@ -188,6 +188,12 @@ function showIngestProgress(job){
   setText('ingestParsed', `${fmt(parsed)} parsed`);
   setText('ingestInserted', `${fmt(inserted)} inserted`);
   setText('ingestSpeed', `${fmt(job.speed||0)} logs/sec`);
+  const errEl=$('ingestError');
+  if(errEl){
+    const err=job.error || job.meta?.error || '';
+    errEl.hidden = !(job.status==='failed' && err);
+    errEl.textContent = err ? `Reason: ${err}` : '';
+  }
   const bar=$('ingestBar'); if(bar) bar.style.width=pct+'%';
 }
 
@@ -196,7 +202,7 @@ async function pollIngestionJob(jobId){
     const job = await api(endpoint(`/ingestion/${jobId}`));
     showIngestProgress(job);
     if(job.status==='completed') return job;
-    if(job.status==='failed') throw new Error(job.error || 'Ingestion failed');
+    if(job.status==='failed') throw new Error(job.error || job.meta?.error || 'Ingestion failed. Open Upload History to see details.');
     await new Promise(r=>setTimeout(r, 1000));
   }
   throw new Error('Ingestion is still running. Please check Ops → Ingestion Jobs.');
@@ -221,7 +227,8 @@ async function uploadBody(body,name='pasted logs'){
     if($('quickTime')) $('quickTime').value='all';
     await Promise.allSettled([loadOverview(),loadServices(),loadEndpoints(),loadAlertsOps(),loadUploadHistory(),searchLogs(1)]);
     toast('Upload complete. Metrics, services, endpoints and search are refreshed.','success');
-  }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');showIngestProgress({fileName:name,status:'failed',stage:'Failed',bytes:size,parsed:0,inserted:0,speed:0,error:e.message});}
+  }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');showIngestProgress({fileName:name,status:'failed',stage:'Failed',bytes:size,parsed:0,inserted:0,speed:0,error:e.message});
+    await Promise.allSettled([loadUploadHistory(), loadOverview()]);}
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}

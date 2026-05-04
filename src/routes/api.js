@@ -168,17 +168,31 @@ router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHand
   const filePath = path.join(os.tmpdir(), `observex-${job.id}.log`);
   const out = fs.createWriteStream(filePath);
   let bytes = 0;
-  await new Promise((resolve, reject) => {
-    req.on('data', chunk => {
-      bytes += chunk.length;
-      updateJob(job, { bytes, stage:'Receiving file' });
-      if (bytes > MAX_UPLOAD_BYTES) reject(Object.assign(new Error(`Upload exceeds limit ${Math.round(MAX_UPLOAD_BYTES/1024/1024)}MB`), { status:413 }));
+  try {
+    await new Promise((resolve, reject) => {
+      let rejected = false;
+      req.on('data', chunk => {
+        bytes += chunk.length;
+        updateJob(job, { bytes, stage:'Receiving file' });
+        if (bytes > MAX_UPLOAD_BYTES && !rejected) {
+          rejected = true;
+          const err = Object.assign(new Error(`Upload exceeds limit ${Math.round(MAX_UPLOAD_BYTES/1024/1024)}MB`), { status:413 });
+          req.destroy(err);
+          out.destroy(err);
+          reject(err);
+        }
+      });
+      req.on('error', reject);
+      out.on('error', reject);
+      out.on('finish', resolve);
+      req.pipe(out);
     });
-    req.on('error', reject);
-    out.on('error', reject);
-    out.on('finish', resolve);
-    req.pipe(out);
-  });
+  } catch (err) {
+    await updateUploadRecord(workspace, environment, job.uploadRecordId, { status:'failed', parser_errors:1, meta:{ bytes, stage:'Upload failed before parsing', error: err.message || String(err) } }).catch(()=>{});
+    updateJob(job, { status:'failed', stage:'Upload failed before parsing', bytes, error: err.message || String(err) });
+    fs.promises.rm(filePath, { force:true }).catch(()=>{});
+    throw err;
+  }
   job.bytes = bytes;
   await updateUploadRecord(workspace, environment, job.uploadRecordId, { status:'queued', meta:{ bytes, stage:'Queued for parsing' } }).catch(()=>{});
   updateJob(job, { status:'queued', stage:'Queued for parsing', bytes });

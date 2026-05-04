@@ -193,3 +193,6 @@
 .tiny{padding:8px 10px!important;border-radius:12px!important;font-size:12px!important;}
 .upload-actions .danger-subtle{margin-left:auto;}
 @media(max-width:900px){.history-summary{grid-template-columns:repeat(2,1fr)}.history-actions{justify-content:flex-start}.upload-actions .danger-subtle{margin-left:0}}
+
+.ingest-error{margin-top:10px;padding:10px 12px;border:1px solid rgba(255,99,99,.35);background:rgba(255,99,99,.08);color:#ffb4b4;border-radius:12px;font-size:12px;line-height:1.4;word-break:break-word}
+body.light .ingest-error{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.25);color:#991b1b}
