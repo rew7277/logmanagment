@@ -84,20 +84,57 @@ async function clearUploadedLogs(){
   }catch(e){toast(e.message,'error');}
 }
 
+function showIngestProgress(job){
+  const box=$('ingestProgress'); if(!box) return;
+  box.hidden=false;
+  const totalBytes = Number(job.bytes || 0);
+  const inserted = Number(job.inserted || 0);
+  const parsed = Number(job.parsed || 0);
+  let pct = 8;
+  if(job.status==='queued') pct=18;
+  else if(job.status==='processing') pct = Math.min(96, 22 + Math.round(Math.max(inserted, parsed) / Math.max(parsed || inserted || 1, 1) * 60));
+  else if(job.status==='completed') pct=100;
+  else if(job.status==='failed') pct=100;
+  setText('ingestStage', job.stage || job.status || 'Processing');
+  setText('ingestMeta', `${esc(job.fileName||'upload')} · ${fmt(Math.round(totalBytes/1024))} KB · ${esc(job.status||'')}`);
+  setText('ingestPercent', `${pct}%`);
+  setText('ingestParsed', `${fmt(parsed)} parsed`);
+  setText('ingestInserted', `${fmt(inserted)} inserted`);
+  setText('ingestSpeed', `${fmt(job.speed||0)} logs/sec`);
+  const bar=$('ingestBar'); if(bar) bar.style.width=pct+'%';
+}
+
+async function pollIngestionJob(jobId){
+  for(let i=0;i<720;i++){
+    const job = await api(endpoint(`/ingestion/${jobId}`));
+    showIngestProgress(job);
+    if(job.status==='completed') return job;
+    if(job.status==='failed') throw new Error(job.error || 'Ingestion failed');
+    await new Promise(r=>setTimeout(r, 1000));
+  }
+  throw new Error('Ingestion is still running. Please check Ops → Ingestion Jobs.');
+}
+
 async function uploadBody(body,name='pasted logs'){
   const headers={'Content-Type':'text/plain','X-File-Name':name};
-  setText('uploadStatus',`Uploading ${name}...`); 
+  const isFile = typeof File !== 'undefined' && body instanceof File;
+  const size = isFile ? body.size : new Blob([body]).size;
+  setText('uploadStatus',`Starting ingestion for ${name}...`);
+  showIngestProgress({fileName:name,status:'receiving',stage:'Preparing upload',bytes:size,parsed:0,inserted:0,speed:0});
   try{
     const start=performance.now();
-    const res=await api(endpoint('/logs/upload'),{method:'POST',headers,body});
+    const startRes=await api(endpoint('/logs/upload-async'),{method:'POST',headers,body});
+    showIngestProgress(startRes);
+    setText('uploadStatus',`Queued ${name}. Parsing in background...`);
+    const job=await pollIngestionJob(startRes.id);
     const sec=Math.max((performance.now()-start)/1000,.1).toFixed(1);
-    toast(`Parsed ${fmt(res.parsed||res.inserted||0)} events, inserted ${fmt(res.inserted||0)} in ${sec}s`,'success');
-    setText('uploadStatus',`Upload completed · ${fmt(res.inserted||0)} events · parser: ${esc(res.parser||'auto')} · ${sec}s`);
+    toast(`Ingested ${fmt(job.inserted||0)} events in ${sec}s`,'success');
+    setText('uploadStatus',`Upload completed · ${fmt(job.inserted||0)} events · ${fmt(job.speed||0)} logs/sec · ${sec}s`);
     if($('logUpload')) $('logUpload').value='';
-    if($('quickTime')) $('quickTime').value='all'; // ensure All time so just-uploaded logs are visible
+    if($('quickTime')) $('quickTime').value='all';
     await Promise.allSettled([loadOverview(),loadServices(),loadEndpoints(),loadAlertsOps(),searchLogs(1)]);
-    toast('Upload complete. Open Log Search to filter or inspect logs.','success');
-  }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');}
+    toast('Upload complete. Metrics, services, endpoints and search are refreshed.','success');
+  }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');showIngestProgress({fileName:name,status:'failed',stage:'Failed',bytes:size,parsed:0,inserted:0,speed:0,error:e.message});}
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}

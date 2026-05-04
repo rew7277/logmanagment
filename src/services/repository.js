@@ -443,14 +443,59 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
       values
     );
 
+    // Fast trace rollup: old code upserted one trace per log row. That made uploads slow.
+    // This keeps one representative row per trace and performs one bulk upsert.
+    const traceMap = new Map();
     for (const payload of logs) {
+      const traceId = payload.trace_id || payload.raw?.trace_id || payload.raw?.event_id || payload.raw?.correlation_id;
+      if (!traceId) continue;
       const rawServiceName = payload.service_name || payload.service || null;
       const serviceName = rawServiceName && !String(rawServiceName).toLowerCase().endsWith('.xml') ? rawServiceName : null;
       const serviceId = serviceCache.get(serviceName) || null;
       const method = payload.method ? String(payload.method).toUpperCase() : null;
       const logPath = payload.path || payload.endpoint || null;
       const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
-      await upsertTraceFromLog(client, env, serviceId, endpointId, payload);
+      const severity = String(payload.severity || '').toUpperCase();
+      const status = ['ERROR','FATAL'].includes(severity) ? 'error' : 'success';
+      const existing = traceMap.get(traceId);
+      if (!existing) {
+        traceMap.set(traceId, { traceId, serviceId, endpointId, status, startedAt: payload.timestamp || null, payload });
+      } else {
+        existing.status = existing.status === 'error' || status === 'error' ? 'error' : status;
+        existing.serviceId = existing.serviceId || serviceId;
+        existing.endpointId = existing.endpointId || endpointId;
+        if (payload.timestamp && (!existing.startedAt || new Date(payload.timestamp) < new Date(existing.startedAt))) existing.startedAt = payload.timestamp;
+      }
+    }
+    const traceItems = [...traceMap.values()];
+    if (traceItems.length) {
+      const traceValues = [];
+      const tracePlaceholders = [];
+      traceItems.forEach((t, idx) => {
+        const base = idx * 8;
+        const payload = t.payload || {};
+        tracePlaceholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},0,COALESCE($${base+6}, now()),$${base+7}::jsonb)`);
+        traceValues.push(env.id, t.serviceId, t.endpointId, t.traceId, t.status, t.startedAt || null, JSON.stringify({
+          event_id: payload.raw?.event_id || t.traceId,
+          correlation_id: payload.raw?.correlation_id || t.traceId,
+          transaction_id: payload.transaction_id || payload.raw?.transaction_id || null,
+          service_name: payload.service_name || payload.service || null,
+          method: payload.method || null,
+          path: payload.path || payload.endpoint || null,
+          rolled_up_events: logs.length
+        }));
+      });
+      await client.query(
+        `INSERT INTO traces(environment_id, service_id, endpoint_id, trace_id, status, latency_ms, started_at, meta)
+         VALUES ${tracePlaceholders.join(',')}
+         ON CONFLICT(environment_id, trace_id) DO UPDATE SET
+           service_id=COALESCE(traces.service_id, EXCLUDED.service_id),
+           endpoint_id=COALESCE(traces.endpoint_id, EXCLUDED.endpoint_id),
+           status=CASE WHEN traces.status='error' OR EXCLUDED.status='error' THEN 'error' ELSE EXCLUDED.status END,
+           started_at=LEAST(traces.started_at, EXCLUDED.started_at),
+           meta=traces.meta || EXCLUDED.meta`,
+        traceValues
+      );
     }
 
     await client.query(

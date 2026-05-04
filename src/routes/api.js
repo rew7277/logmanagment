@@ -1,4 +1,7 @@
 import express from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { bulkCreateLogs, deleteEnvironmentLogs, getAlerts, getEndpoints, getLogs, getOps, getOverview, getServices, getTraces, getWorkspaces, rca } from '../services/repository.js';
 import { requireApiKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -9,6 +12,70 @@ router.use(rateLimit({ maxRequests: 180, windowMs: 60_000 }));
 const ingestLimit = rateLimit({ maxRequests: 30, windowMs: 60_000 });
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 750 * 1024 * 1024);
 const BATCH_SIZE = Number(process.env.INGEST_BATCH_SIZE || 5000);
+
+const jobs = new Map();
+const JOB_TTL_MS = 60 * 60 * 1000;
+function createJob(fileName='upload.log') {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+  const job = { id, fileName, status:'receiving', stage:'Receiving file', bytes:0, parsed:0, inserted:0, rejected:0, speed:0, startedAt:Date.now(), updatedAt:Date.now(), error:null };
+  jobs.set(id, job);
+  return job;
+}
+function updateJob(job, patch={}) {
+  Object.assign(job, patch, { updatedAt: Date.now() });
+  const elapsed = Math.max((Date.now() - job.startedAt) / 1000, 0.1);
+  job.speed = Math.round((job.inserted || job.parsed || 0) / elapsed);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of jobs.entries()) {
+    if (['completed','failed'].includes(job.status) && now - job.updatedAt > JOB_TTL_MS) jobs.delete(id);
+  }
+}, 10 * 60 * 1000).unref?.();
+
+async function processUploadedFile(job, filePath, workspace, environment) {
+  let batch = [];
+  async function flush(){
+    if(!batch.length) return;
+    updateJob(job, { status:'processing', stage:`Indexing ${batch.length} parsed events` });
+    const created = await bulkCreateLogs(workspace, environment, batch);
+    job.inserted += created.length;
+    batch = [];
+    updateJob(job, { stage:'Parsing & indexing', status:'processing' });
+  }
+  async function acceptItems(items){
+    for (const item of items) {
+      if (item) { batch.push(item); job.parsed++; }
+      else job.rejected++;
+      if (batch.length >= BATCH_SIZE) await flush();
+    }
+    updateJob(job, {});
+  }
+  try {
+    updateJob(job, { status:'processing', stage:'Parsing Mule logs' });
+    const rawParser = createRawStreamParser(acceptItems);
+    const stream = fs.createReadStream(filePath, { encoding:'utf8', highWaterMark: 1024 * 1024 });
+    let mode = null;
+    let structuredBuffer = '';
+    for await (const textChunk of stream) {
+      if (mode === null) {
+        const first = String(textChunk).trimStart()[0];
+        mode = first === '{' || first === '[' ? 'structured' : 'raw';
+      }
+      if (mode === 'structured') structuredBuffer += textChunk;
+      else await rawParser.push(textChunk);
+    }
+    if (mode === 'structured') await acceptItems(parseUploadText(structuredBuffer));
+    else await rawParser.finish();
+    await flush();
+    if (!job.parsed) throw new Error('No parseable log events found. Supported: Mule runtime logs, JSON/JSONL, and generic timestamped logs.');
+    updateJob(job, { status:'completed', stage:'Completed' });
+  } catch (err) {
+    updateJob(job, { status:'failed', stage:'Failed', error: err.message || String(err) });
+  } finally {
+    fs.promises.rm(filePath, { force:true }).catch(()=>{});
+  }
+}
 
 const asyncHandler = fn => (req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const normalizeEnvironment = req => String(req.params.environment || req.query.environment || 'PROD').toUpperCase();
@@ -65,6 +132,36 @@ router.post('/:workspace/:environment/logs', ingestLimit, requireApiKey, asyncHa
 router.delete('/:workspace/:environment/logs', ingestLimit, asyncHandler(async (req,res)=>{
   const data = await deleteEnvironmentLogs(normalizeWorkspace(req), normalizeEnvironment(req));
   res.json({data});
+}));
+
+router.get('/:workspace/:environment/ingestion/:jobId', asyncHandler(async (req,res)=>{
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({error:'Ingestion job not found or expired'});
+  res.json({data:job});
+}));
+
+router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHandler(async (req,res)=>{
+  const workspace = normalizeWorkspace(req);
+  const environment = normalizeEnvironment(req);
+  const fileName = String(req.headers['x-file-name'] || 'upload.log').slice(0, 160);
+  const job = createJob(fileName);
+  const filePath = path.join(os.tmpdir(), `observex-${job.id}.log`);
+  const out = fs.createWriteStream(filePath);
+  let bytes = 0;
+  await new Promise((resolve, reject) => {
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      updateJob(job, { bytes, stage:'Receiving file' });
+      if (bytes > MAX_UPLOAD_BYTES) reject(Object.assign(new Error(`Upload exceeds limit ${Math.round(MAX_UPLOAD_BYTES/1024/1024)}MB`), { status:413 }));
+    });
+    req.on('error', reject);
+    out.on('error', reject);
+    out.on('finish', resolve);
+    req.pipe(out);
+  });
+  updateJob(job, { status:'queued', stage:'Queued for parsing', bytes });
+  setImmediate(() => processUploadedFile(job, filePath, workspace, environment));
+  res.status(202).json({data:job});
 }));
 
 router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(async (req,res)=>{
