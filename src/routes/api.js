@@ -12,8 +12,16 @@ import {
   getWorkspaces,
   rca
 } from '../services/repository.js';
+import { requireApiKey } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 const router = express.Router();
+
+// Global API rate limit: 120 requests / minute per IP
+router.use(rateLimit({ maxRequests: 120, windowMs: 60_000 }));
+
+// Tighter limit for ingest endpoints (POST logs / upload)
+const ingestLimit = rateLimit({ maxRequests: 20, windowMs: 60_000 });
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -55,6 +63,8 @@ function parseLogLine(line) {
   }
 }
 
+// ─── Read endpoints (public) ──────────────────────────────────────────────────
+
 router.get('/workspaces', asyncHandler(async (_req, res) => {
   res.json({ data: await getWorkspaces() });
 }));
@@ -78,18 +88,6 @@ router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
   res.json({ data: await getLogs(normalizeWorkspace(req), normalizeEnvironment(req), limit) });
 }));
 
-router.post('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
-  const payload = Array.isArray(req.body) ? req.body : [req.body];
-  const data = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), payload);
-  res.status(201).json({ inserted: data.length, data });
-}));
-
-router.post('/:workspace/:environment/logs/upload', express.text({ type: '*/*', limit: '10mb' }), asyncHandler(async (req, res) => {
-  const lines = String(req.body || '').split(/\r?\n/).map(parseLogLine).filter(Boolean);
-  const data = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), lines);
-  res.status(201).json({ inserted: data.length });
-}));
-
 router.get('/:workspace/:environment/traces', asyncHandler(async (req, res) => {
   res.json({ data: await getTraces(normalizeWorkspace(req), normalizeEnvironment(req)) });
 }));
@@ -105,5 +103,33 @@ router.get('/:workspace/:environment/ops', asyncHandler(async (req, res) => {
 router.post('/:workspace/:environment/rca', asyncHandler(async (req, res) => {
   res.json({ data: await rca(normalizeWorkspace(req), normalizeEnvironment(req), req.body?.query || '') });
 }));
+
+// ─── Write endpoints (protected + rate-limited) ───────────────────────────────
+
+router.post(
+  '/:workspace/:environment/logs',
+  ingestLimit,
+  requireApiKey,
+  asyncHandler(async (req, res) => {
+    const payload = Array.isArray(req.body) ? req.body : [req.body];
+    const data = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), payload);
+    res.status(201).json({ inserted: data.length, data });
+  })
+);
+
+router.post(
+  '/:workspace/:environment/logs/upload',
+  ingestLimit,
+  requireApiKey,
+  express.text({ type: '*/*', limit: '10mb' }),
+  asyncHandler(async (req, res) => {
+    const lines = String(req.body || '').split(/\r?\n/).map(parseLogLine).filter(Boolean);
+    if (lines.length === 0) {
+      return res.status(400).json({ error: 'No parseable log lines found in body.' });
+    }
+    const data = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), lines);
+    res.status(201).json({ inserted: data.length });
+  })
+);
 
 export default router;

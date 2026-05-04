@@ -1,18 +1,19 @@
 {
   "name": "observex-env-first-postgres",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Environment-first log observability platform with PostgreSQL persistence for Railway",
   "main": "src/server.js",
   "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "start": "node src/server.js",
     "dev": "NODE_ENV=development node --watch src/server.js",
     "db:migrate": "node src/db/migrate.js",
     "db:seed": "node src/db/seed.js",
-    "health": "node -e \"fetch(`http://localhost:${process.env.PORT||3000}/health`).then(r=>r.json()).then(console.log)\""
+    "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||3000)+'/health').then(r=>r.json()).then(console.log)\"",
+    "gen-api-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "dependencies": {
     "compression": "^1.7.4",

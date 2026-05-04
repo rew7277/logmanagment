@@ -1,12 +1,12 @@
-import { query, hasDatabase } from '../db/pool.js';
+import { query, hasDatabase, withTransaction } from '../db/pool.js';
 
 const fallback = {
   workspaces: [{ id: 'demo-workspace', name: 'FSBL Production Ops', slug: 'fsbl-prod-ops' }],
   environments: [
     { id: 'env-prod', name: 'PROD', display_name: 'PROD', health_score: 92, status: 'degraded' },
-    { id: 'env-uat', name: 'UAT', display_name: 'UAT', health_score: 96, status: 'watch' },
-    { id: 'env-dev', name: 'DEV', display_name: 'DEV', health_score: 99, status: 'healthy' },
-    { id: 'env-dr', name: 'DR', display_name: 'DR', health_score: 100, status: 'healthy' }
+    { id: 'env-uat',  name: 'UAT',  display_name: 'UAT',  health_score: 96, status: 'watch' },
+    { id: 'env-dev',  name: 'DEV',  display_name: 'DEV',  health_score: 99, status: 'healthy' },
+    { id: 'env-dr',   name: 'DR',   display_name: 'DR',   health_score: 100, status: 'healthy' }
   ]
 };
 
@@ -39,7 +39,7 @@ export async function getOverview(workspaceSlug, environmentName) {
     return {
       environment: env,
       metrics: {
-        logs_ingested: 12800000,
+        logs_ingested: 12_800_000,
         error_rate: 5.1,
         p95_latency_ms: 842,
         active_alerts: 17,
@@ -51,13 +51,23 @@ export async function getOverview(workspaceSlug, environmentName) {
   }
 
   const [logStats, alertStats, serviceStats, endpointStats, traceStats] = await Promise.all([
-    query(`SELECT count(*)::int logs_ingested,
-           COALESCE(100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) error_rate
-           FROM log_events WHERE environment_id=$1 AND timestamp >= now() - interval '24 hours'`, [env.id]),
+    query(
+      `SELECT count(*)::int logs_ingested,
+              COALESCE(100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) error_rate
+       FROM log_events WHERE environment_id=$1 AND timestamp >= now() - interval '24 hours'`,
+      [env.id]
+    ),
     query(`SELECT count(*)::int active_alerts FROM alerts WHERE environment_id=$1 AND status='open'`, [env.id]),
     query(`SELECT count(*)::int services FROM services WHERE environment_id=$1`, [env.id]),
-    query(`SELECT count(*)::int endpoints FROM endpoints ep JOIN services s ON s.id=ep.service_id WHERE s.environment_id=$1`, [env.id]),
-    query(`SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int p95_latency_ms FROM traces WHERE environment_id=$1 AND started_at >= now() - interval '24 hours'`, [env.id])
+    query(
+      `SELECT count(*)::int endpoints FROM endpoints ep JOIN services s ON s.id=ep.service_id WHERE s.environment_id=$1`,
+      [env.id]
+    ),
+    query(
+      `SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int p95_latency_ms
+       FROM traces WHERE environment_id=$1 AND started_at >= now() - interval '24 hours'`,
+      [env.id]
+    )
   ]);
 
   return {
@@ -79,15 +89,15 @@ export async function getServices(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) {
     return [
-      { name: 'payment-engine-api', owner: 'Payments Team', runtime_version: '4.4.0', app_version: '1.0.8', status: 'degraded', health_score: 92.1, error_rate: 5.1, p95_latency_ms: 842 },
-      { name: 'employee-portal-api', owner: 'EP Integration Team', runtime_version: '4.4.0', app_version: '2.3.1', status: 'healthy', health_score: 97.8, error_rate: 0.42, p95_latency_ms: 420 },
-      { name: 'bbps-integration-api', owner: 'Banking Team', runtime_version: '4.4.0', app_version: '1.5.2', status: 'watch', health_score: 96.8, error_rate: 1.9, p95_latency_ms: 610 }
+      { name: 'payment-engine-api',  owner: 'Payments Team',       runtime_version: '4.4.0', app_version: '1.0.8', status: 'degraded', health_score: 92.1, error_rate: 5.1,  p95_latency_ms: 842 },
+      { name: 'employee-portal-api', owner: 'EP Integration Team', runtime_version: '4.4.0', app_version: '2.3.1', status: 'healthy',  health_score: 97.8, error_rate: 0.42, p95_latency_ms: 420 },
+      { name: 'bbps-integration-api',owner: 'Banking Team',        runtime_version: '4.4.0', app_version: '1.5.2', status: 'watch',    health_score: 96.8, error_rate: 1.9,  p95_latency_ms: 610 }
     ];
   }
   const result = await query(
     `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status, s.health_score,
-      COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
-      COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms
+            COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
+            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms
      FROM services s
      LEFT JOIN log_events le ON le.service_id=s.id AND le.timestamp >= now() - interval '24 hours'
      LEFT JOIN traces t ON t.service_id=s.id AND t.started_at >= now() - interval '24 hours'
@@ -102,26 +112,12 @@ export async function getServices(workspaceSlug, environmentName) {
 export async function getEndpoints(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) {
-    return [
-      { method: 'POST', path: '/payment/status', service_name: 'payment-engine-api', calls_per_hour: 8240, error_rate: 4.8, p95_latency_ms: 880, backend_ms: 720, last_failure: '2m ago', status: 'degraded' },
-      { method: 'GET', path: '/employee/profile/{id}', service_name: 'employee-portal-api', calls_per_hour: 14820, error_rate: 0.2, p95_latency_ms: 260, backend_ms: 90, last_failure: '46m ago', status: 'healthy' }
-    ];
-  }
+  if (!hasDatabase) return [];
   const result = await query(
-    `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
-      count(le.*)::int calls_per_hour,
-      COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
-      COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms,
-      COALESCE(max((t.meta->>'backend_ms')::int),0) backend_ms,
-      max(le.timestamp) FILTER (WHERE le.severity IN ('ERROR','FATAL')) last_failure
-     FROM endpoints ep
+    `SELECT ep.*, s.name service_name FROM endpoints ep
      JOIN services s ON s.id=ep.service_id
-     LEFT JOIN log_events le ON le.endpoint_id=ep.id AND le.timestamp >= now() - interval '1 hour'
-     LEFT JOIN traces t ON t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours'
      WHERE s.environment_id=$1
-     GROUP BY ep.id, s.name
-     ORDER BY error_rate DESC, calls_per_hour DESC`,
+     ORDER BY s.name, ep.method, ep.path`,
     [env.id]
   );
   return result.rows;
@@ -133,7 +129,7 @@ export async function getLogs(workspaceSlug, environmentName, limit = 100) {
   if (!hasDatabase) {
     return [
       { timestamp: new Date().toISOString(), severity: 'ERROR', trace_id: 'TR-8FA91C', message: 'Backend timeout on payment-engine connector after 800ms' },
-      { timestamp: new Date().toISOString(), severity: 'WARN', trace_id: 'TR-8FA91C', message: 'Retry policy triggered for external bank dependency' }
+      { timestamp: new Date().toISOString(), severity: 'WARN',  trace_id: 'TR-8FA91C', message: 'Retry policy triggered for external bank dependency' }
     ];
   }
   const result = await query(
@@ -149,55 +145,86 @@ export async function getLogs(workspaceSlug, environmentName, limit = 100) {
   return result.rows;
 }
 
-export async function createLog(workspaceSlug, environmentName, payload) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!env) throw new Error('Environment not found');
-  if (!hasDatabase) return { id: crypto.randomUUID?.() || String(Date.now()), ...payload };
+// ─── Single log insert ────────────────────────────────────────────────────────
 
+/**
+ * Internal: insert one log row using an existing DB client (for transaction use).
+ */
+async function _insertLog(client, env, payload) {
   const serviceName = payload.service_name || payload.service || null;
-  const method = payload.method || null;
-  const path = payload.path || payload.endpoint || null;
+  const method      = payload.method || null;
+  const logPath     = payload.path || payload.endpoint || null;
 
-  let serviceId = null;
+  let serviceId  = null;
   let endpointId = null;
 
   if (serviceName) {
-    const service = await query(
+    const svc = await client.query(
       `INSERT INTO services(environment_id, name, status)
        VALUES($1,$2,'healthy')
        ON CONFLICT(environment_id, name) DO UPDATE SET name=EXCLUDED.name
        RETURNING id`,
       [env.id, serviceName]
     );
-    serviceId = service.rows[0].id;
+    serviceId = svc.rows[0].id;
   }
 
-  if (serviceId && method && path) {
-    const ep = await query(
+  if (serviceId && method && logPath) {
+    const ep = await client.query(
       `INSERT INTO endpoints(service_id, method, path, status)
        VALUES($1,$2,$3,'healthy')
        ON CONFLICT(service_id, method, path) DO UPDATE SET path=EXCLUDED.path
        RETURNING id`,
-      [serviceId, method.toUpperCase(), path]
+      [serviceId, method.toUpperCase(), logPath]
     );
     endpointId = ep.rows[0].id;
   }
 
-  const result = await query(
+  const result = await client.query(
     `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, timestamp, severity, trace_id, message, raw)
      VALUES($1,$2,$3,$4,$5,COALESCE($6, now()),$7,$8,$9,$10)
      RETURNING *`,
-    [env.org_id, env.workspace_id, env.id, serviceId, endpointId, payload.timestamp || null, payload.severity || 'INFO', payload.trace_id || null, payload.message || String(payload.raw || ''), payload]
+    [
+      env.org_id, env.workspace_id, env.id,
+      serviceId, endpointId,
+      payload.timestamp || null,
+      String(payload.severity || 'INFO').toUpperCase(),
+      payload.trace_id || null,
+      payload.message || String(payload.raw || ''),
+      payload
+    ]
   );
   return result.rows[0];
 }
 
+export async function createLog(workspaceSlug, environmentName, payload) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) throw new Error('Environment not found');
+  if (!hasDatabase) return { id: crypto.randomUUID(), ...payload };
+
+  // Use pool directly (single-statement path doesn't need a transaction)
+  return _insertLog({ query: (...args) => query(...args) }, env, payload);
+}
+
+/**
+ * FIX: Old version called createLog() per row → getEnvironment() was called N
+ * times (one per log). Now we look up the environment ONCE and wrap all inserts
+ * in a single SERIALIZABLE transaction so bulk uploads are atomic.
+ */
 export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
-  const created = [];
-  for (const log of logs) {
-    created.push(await createLog(workspaceSlug, environmentName, log));
+  if (!hasDatabase) {
+    return logs.map((l) => ({ id: crypto.randomUUID(), ...l }));
   }
-  return created;
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) throw new Error('Environment not found');
+
+  return withTransaction(async (client) => {
+    const created = [];
+    for (const log of logs) {
+      created.push(await _insertLog(client, env, log));
+    }
+    return created;
+  });
 }
 
 export async function getTraces(workspaceSlug, environmentName) {
@@ -239,8 +266,8 @@ export async function getOps(workspaceSlug, environmentName) {
   if (!env) return null;
   if (!hasDatabase) {
     return {
-      ingestion: [{ source_type: 'S3', source_name: 'prod/app-logs/hourly', status: 'healthy', accepted_count: 128000, rejected_count: 12, parser_errors: 3 }],
-      security: [{ event_type: 'PII_MASKING', severity: 'INFO', message: 'PII masked before indexing', count: 987 }],
+      ingestion:   [{ source_type: 'S3', source_name: 'prod/app-logs/hourly', status: 'healthy', accepted_count: 128000, rejected_count: 12, parser_errors: 3 }],
+      security:    [{ event_type: 'PII_MASKING', severity: 'INFO', message: 'PII masked before indexing', count: 987 }],
       deployments: [{ version: '1.0.8', before_error_rate: 0.008, after_error_rate: 0.051, before_p95_ms: 286, after_p95_ms: 842 }]
     };
   }
@@ -248,7 +275,7 @@ export async function getOps(workspaceSlug, environmentName) {
     query(`SELECT * FROM ingestion_jobs WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 20`, [env.id]),
     query(`SELECT * FROM security_events WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 20`, [env.id]),
     query(`SELECT d.*, s.name service_name FROM deployments d LEFT JOIN services s ON s.id=d.service_id WHERE d.environment_id=$1 ORDER BY deployed_at DESC LIMIT 20`, [env.id])
-  ]);
+  ])
   return { ingestion: ingestion.rows, security: security.rows, deployments: deployments.rows };
 }
 
@@ -263,9 +290,9 @@ export async function rca(workspaceSlug, environmentName, queryText = '') {
   return {
     environment: environmentName,
     query: queryText,
-    summary: `${environmentName} RCA is scoped only to this environment. Current health is ${overview?.environment?.health_score ?? 'N/A'} with ${overview?.metrics?.active_alerts ?? 0} active alerts.`,
+    summary: `${environmentName} RCA is scoped to this environment only. Health: ${overview?.environment?.health_score ?? 'N/A'}, active alerts: ${overview?.metrics?.active_alerts ?? 0}.`,
     likely_root_cause: topError ? topError.message : 'No critical error pattern found in the latest logs.',
-    impact: alerts.slice(0, 3).map((alert) => alert.title),
+    impact: alerts.slice(0, 3).map((a) => a.title),
     recommended_actions: [
       'Open the affected service and endpoint first.',
       'Inspect slow traces and backend latency split.',
