@@ -30,10 +30,10 @@ function fallbackLogs(environmentName, f={}) {
   if (f.severity) rows = rows.filter(l => l.severity === String(f.severity).toUpperCase());
   if (f.service) rows = rows.filter(l => String(l.service_name || '').toLowerCase().includes(String(f.service).toLowerCase()));
   if (f.path) rows = rows.filter(l => String(l.path || '').toLowerCase().includes(String(f.path).toLowerCase()));
-  if (f.trace_id) rows = rows.filter(l => String(l.trace_id || '').toLowerCase().includes(String(f.trace_id).toLowerCase()));
+  if (f.trace_id) rows = rows.filter(l => [l.trace_id,l.raw?.event_id,l.raw?.correlation_id,l.raw?.transaction_id].some(v => String(v || '').toLowerCase().includes(String(f.trace_id).toLowerCase())));
   if (f.q) {
     const q = String(f.q).toLowerCase();
-    rows = rows.filter(l => [l.message,l.trace_id,l.service_name,l.path,l.method].some(v => String(v||'').toLowerCase().includes(q)));
+    rows = rows.filter(l => [l.message,l.trace_id,l.raw?.event_id,l.raw?.correlation_id,l.raw?.transaction_id,l.service_name,l.path,l.method].some(v => String(v||'').toLowerCase().includes(q)));
   }
   rows = rows.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
   const total = rows.length;
@@ -205,13 +205,17 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   const q = String(f.q || '').trim();
   if (q) {
     const base = values.length;
-    values.push(q, q, q, q, q);
-    where.push(`(le.message ILIKE '%' || $${base+1} || '%' OR le.trace_id ILIKE '%' || $${base+2} || '%' OR s.name ILIKE '%' || $${base+3} || '%' OR ep.path ILIKE '%' || $${base+4} || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $${base+5}))`);
+    values.push(q, q, q, q, q, q, q, q);
+    where.push(`(le.message ILIKE '%' || $${base+1} || '%' OR le.trace_id ILIKE '%' || $${base+2} || '%' OR s.name ILIKE '%' || $${base+3} || '%' OR ep.path ILIKE '%' || $${base+4} || le.raw->>'event_id' ILIKE '%' || $${base+5} || '%' OR le.raw->>'correlation_id' ILIKE '%' || $${base+6} || '%' OR le.raw->>'transaction_id' ILIKE '%' || $${base+7} || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $${base+8}))`);
   }
   if (f.severity) add('le.severity = ?', String(f.severity).toUpperCase());
   if (f.service) add(`s.name ILIKE '%' || ? || '%'`, String(f.service));
   if (f.path) add(`ep.path ILIKE '%' || ? || '%'`, String(f.path));
-  if (f.trace_id) add(`le.trace_id ILIKE '%' || ? || '%'`, String(f.trace_id));
+  if (f.trace_id) {
+    const base = values.length;
+    values.push(String(f.trace_id), String(f.trace_id), String(f.trace_id), String(f.trace_id));
+    where.push(`(le.trace_id ILIKE '%' || $${base+1} || '%' OR le.raw->>'event_id' ILIKE '%' || $${base+2} || '%' OR le.raw->>'correlation_id' ILIKE '%' || $${base+3} || '%' OR le.raw->>'transaction_id' ILIKE '%' || $${base+4} || '%')`);
+  }
   if (f.from) add('le.timestamp >= ?', f.from);
   if (f.to) add('le.timestamp <= ?', f.to);
   if (!f.from && !f.to && f.range && f.range !== 'custom' && f.range !== 'all') {
@@ -247,6 +251,31 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   ]);
   const total = countResult.rows[0]?.total || 0;
   return { items: dataResult.rows, total, page, page_size: pageSize, total_pages: Math.ceil(total / pageSize) };
+}
+
+
+async function upsertTraceFromLog(client, env, serviceId, endpointId, payload) {
+  const traceId = payload.trace_id || payload.raw?.trace_id || payload.raw?.event_id || payload.raw?.correlation_id;
+  if (!traceId) return;
+  const status = ['ERROR','FATAL'].includes(String(payload.severity || '').toUpperCase()) ? 'error' : 'success';
+  await client.query(
+    `INSERT INTO traces(environment_id, service_id, endpoint_id, trace_id, status, latency_ms, started_at, meta)
+     VALUES($1,$2,$3,$4,$5,0,COALESCE($6, now()),$7)
+     ON CONFLICT(environment_id, trace_id) DO UPDATE SET
+       service_id=COALESCE(traces.service_id, EXCLUDED.service_id),
+       endpoint_id=COALESCE(traces.endpoint_id, EXCLUDED.endpoint_id),
+       status=CASE WHEN traces.status='error' OR EXCLUDED.status='error' THEN 'error' ELSE EXCLUDED.status END,
+       started_at=LEAST(traces.started_at, EXCLUDED.started_at),
+       meta=traces.meta || EXCLUDED.meta`,
+    [env.id, serviceId, endpointId, traceId, status, payload.timestamp || null, JSON.stringify({
+      event_id: payload.raw?.event_id || traceId,
+      correlation_id: payload.raw?.correlation_id || traceId,
+      transaction_id: payload.transaction_id || payload.raw?.transaction_id || null,
+      service_name: payload.service_name || payload.service || null,
+      method: payload.method || null,
+      path: payload.path || payload.endpoint || null
+    })]
+  );
 }
 
 // ─── Single log insert ────────────────────────────────────────────────────────
@@ -298,6 +327,7 @@ async function _insertLog(client, env, payload) {
       payload
     ]
   );
+  await upsertTraceFromLog(client, env, serviceId, endpointId, payload);
   return result.rows[0];
 }
 
@@ -412,6 +442,16 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
        RETURNING id, timestamp, severity, trace_id, message`,
       values
     );
+
+    for (const payload of logs) {
+      const rawServiceName = payload.service_name || payload.service || null;
+      const serviceName = rawServiceName && !String(rawServiceName).toLowerCase().endsWith('.xml') ? rawServiceName : null;
+      const serviceId = serviceCache.get(serviceName) || null;
+      const method = payload.method ? String(payload.method).toUpperCase() : null;
+      const logPath = payload.path || payload.endpoint || null;
+      const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
+      await upsertTraceFromLog(client, env, serviceId, endpointId, payload);
+    }
 
     await client.query(
       `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)

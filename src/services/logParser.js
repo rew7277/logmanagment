@@ -62,8 +62,28 @@ function inferService(text) {
   const generic = (raw.match(/(?:service|api_name|apiName|application|mule_app)[=: ]+["']?([A-Za-z0-9._-]+)/i) || [])[1];
   return normalizeServiceName(generic);
 }
-function inferTrace(text) { return (String(text).match(/(?:trace[_-]?id|correlation[_-]?id|event[_-]?id|event|transaction[_-]?id|request[_-]?id)[:=\s]+["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
+function inferIdentifiers(text) {
+  const s = String(text || '');
+  const muleEvent = (s.match(/\[processor:\s*[^\]]*?;\s*event:\s*([^\]\s;]+)/i) || s.match(/;\s*event:\s*([^\]\s;]+)/i) || [])[1] || null;
+  const trace = (s.match(/(?:trace[_-]?id|traceId)\s*[:=]\s*["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null;
+  const correlation = (s.match(/(?:correlation[_-]?id|correlationId|x-correlation-id)\s*[:=]\s*["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null;
+  const eventId = (s.match(/(?:event[_-]?id|eventId)\s*[:=]\s*["']?([A-Za-z0-9._:-]+)/i) || [])[1] || muleEvent;
+  const request = (s.match(/(?:request[_-]?id|requestId)\s*[:=]\s*["']?([A-Za-z0-9._:-]+)/i) || [])[1] || null;
+  const transaction = inferTxn(s);
+  const primary = trace || correlation || eventId || request || transaction || null;
+  return { trace_id: primary, event_id: eventId || primary, correlation_id: correlation || primary, request_id: request, transaction_id: transaction };
+}
+function inferTrace(text) { return inferIdentifiers(text).trace_id; }
 function inferTxn(text) { return (String(text).match(/"?transactionId"?\s*[:=]\s*"?([A-Za-z0-9._:-]+)/i) || [])[1] || null; }
+function maskSensitiveText(value) {
+  return String(value || '')
+    .replace(/(encrdata=)([A-Za-z0-9._~+/=-]{24,})/gi, (_, k, v) => `${k}${v.slice(0, 8)}…${v.slice(-6)}`)
+    .replace(/("?(?:password|secret|token|access[_-]?key|api[_-]?key)"?\s*[:=]\s*"?)([^"\s,}]{6,})/gi, '$1****');
+}
+function enrichRaw(raw, ids, source='parser') {
+  const base = raw && typeof raw === 'object' ? { ...raw } : { original: raw };
+  return { ...base, id_source: source, event_id: ids.event_id || null, correlation_id: ids.correlation_id || null, trace_id: ids.trace_id || null, request_id: ids.request_id || null, transaction_id: ids.transaction_id || base.transaction_id || null };
+}
 function messageAfterLogger(block) {
   const idx = block.indexOf('LoggerMessageProcessor:');
   if (idx >= 0) return block.slice(idx + 'LoggerMessageProcessor:'.length).trim();
@@ -95,7 +115,7 @@ export function parseMuleBlock(block) {
   const processor = raw.match(/\[processor:\s*([^;\]]+)/i);
   const json = extractJsonFragments(raw)[0] || null;
   const msg = messageAfterLogger(raw);
-  const event = (raw.match(/event:\s*([^\]\s;]+)/i) || [])[1] || null;
+  const ids = inferIdentifiers(raw);
   const businessStatus = json?.status || json?.statusCode || null;
   const parsedSeverity = normalizeSeverity(head[1]);
   const effectiveSeverity = (String(json?.status || '').toLowerCase() === 'error' || /\berror\b/i.test(msg)) ? 'ERROR' : parsedSeverity;
@@ -106,11 +126,11 @@ export function parseMuleBlock(block) {
     service_name: strictMuleService(raw) || normalizeServiceName(route?.[1]) || normalizeServiceName(flowRoute?.[3]) || inferService(raw),
     method: route?.[2]?.toUpperCase() || flowRoute?.[1]?.toUpperCase() || inferMethod(raw),
     path: normalizePath(route?.[3]) || normalizePath(flowRoute?.[2]) || inferPath(raw),
-    trace_id: event || inferTrace(raw),
-    transaction_id: inferTxn(raw),
+    trace_id: ids.trace_id,
+    transaction_id: ids.transaction_id,
     processor: processor?.[1] || null,
-    message: msg,
-    raw: { parser: 'mule-runtime', original: raw, processor: processor?.[1] || null, event_id: event, transaction_id: inferTxn(raw), business_status: businessStatus, payload: json }
+    message: maskSensitiveText(msg),
+    raw: enrichRaw({ parser: 'mule-runtime', original: maskSensitiveText(raw), processor: processor?.[1] || null, business_status: businessStatus, payload: json }, ids, ids.event_id ? 'mule-event-header' : 'inferred')
   };
 }
 
@@ -122,17 +142,18 @@ export function extractFromObject(p) {
   const path = pick(p.path, p.endpoint, p.uri, p.url, p.request_uri, p.requestPath, p.resource, raw?.path, raw?.endpoint);
   const trace = pick(p.trace_id, p.traceId, p.correlationId, p.correlation_id, p.eventId, p.event_id, p.transactionId, p.transaction_id, p.requestId, p.request_id, p['x-correlation-id']);
   const text = msg || JSON.stringify(raw || p);
+  const ids = { ...inferIdentifiers(text), trace_id: trace || inferTrace(text), event_id: p.eventId || p.event_id || raw?.event_id || inferIdentifiers(text).event_id, correlation_id: p.correlationId || p.correlation_id || raw?.correlation_id || inferIdentifiers(text).correlation_id };
   return {
     parser: 'generic-json',
     timestamp: normalizeTimestamp(p.timestamp || p.time || p['@timestamp'] || p.datetime || p.date),
     severity: normalizeSeverity(p.severity || p.level || p.log_level || p.status || 'INFO'),
-    trace_id: trace || inferTrace(text),
+    trace_id: ids.trace_id,
     service_name: normalizeServiceName(service) || inferService(text),
     method: method ? String(method).toUpperCase() : inferMethod(text),
     path: normalizePath(path) || inferPath(text),
-    transaction_id: inferTxn(text),
-    message: text,
-    raw: typeof raw === 'object' ? raw : { original: raw }
+    transaction_id: ids.transaction_id,
+    message: maskSensitiveText(text),
+    raw: enrichRaw(typeof raw === 'object' ? raw : { original: maskSensitiveText(raw) }, ids, 'json-or-text')
   };
 }
 
@@ -142,17 +163,18 @@ export function parseGenericBlock(block) {
   try { return extractFromObject(JSON.parse(raw)); } catch {}
   const ts = (raw.match(/\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[,.]\d{3})?/) || [])[0];
   const sev = (raw.match(/\b(FATAL|ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b/i) || [])[1] || 'INFO';
+  const ids = inferIdentifiers(raw);
   return {
     parser: 'generic-text',
     timestamp: normalizeTimestamp(ts),
     severity: normalizeSeverity(sev),
-    trace_id: inferTrace(raw),
+    trace_id: ids.trace_id,
     service_name: inferService(raw),
     method: inferMethod(raw),
     path: inferPath(raw),
-    transaction_id: inferTxn(raw),
-    message: messageAfterLogger(raw),
-    raw: { parser: 'generic-text', original: raw }
+    transaction_id: ids.transaction_id,
+    message: maskSensitiveText(messageAfterLogger(raw)),
+    raw: enrichRaw({ parser: 'generic-text', original: maskSensitiveText(raw) }, ids, 'generic-text')
   };
 }
 
@@ -202,6 +224,11 @@ export function sanitizeParsedRecords(records) {
     r.service_name = strict || normalized || null;
     if (!r.method) r.method = inferMethod(rawText);
     if (!r.path) r.path = inferPath(rawText);
+    const ids = inferIdentifiers(rawText);
+    r.trace_id = r.trace_id || ids.trace_id;
+    r.transaction_id = r.transaction_id || ids.transaction_id;
+    r.message = maskSensitiveText(r.message || '');
+    r.raw = enrichRaw(r.raw || {}, { ...ids, trace_id: r.trace_id || ids.trace_id, transaction_id: r.transaction_id || ids.transaction_id }, ids.event_id ? 'mule-event-header' : 'post-process');
   }
   return postProcessRecords(clean);
 }
