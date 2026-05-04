@@ -85,7 +85,7 @@ router.get('/:workspace/:environment/endpoints', asyncHandler(async (req, res) =
 
 router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 100), 500);
-  res.json({ data: await getLogs(normalizeWorkspace(req), normalizeEnvironment(req), limit) });
+  res.json({ data: await getLogs(normalizeWorkspace(req), normalizeEnvironment(req), limit, req.query.q || '') });
 }));
 
 router.get('/:workspace/:environment/traces', asyncHandler(async (req, res) => {

@@ -10,7 +10,7 @@
   <div class="glow a"></div><div class="glow b"></div><div class="glow c"></div>
   <div class="shell">
     <aside>
-      <div class="brand"><div class="logo">OX</div><div><h1>ObserveX</h1><p>Environment-first observability</p></div></div>
+      <div class="brand"><div class="logo">OX</div><div><h1>ObserveX</h1><p>Environment-first observability</p></div></div><div class="sidebar-actions"><button id="sidebarToggle" type="button">☰ Close</button><button id="themeToggle" type="button">☾ Dark</button></div>
       <div class="context-card">
         <label>Workspace</label><select id="workspaceSelect"></select>
         <label>Environment</label><select id="environmentSelect"><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select>
@@ -31,7 +31,7 @@
     <main>
       <section class="hero" id="overview">
         <div class="hero-main"><div class="eyebrow"><span class="dot"></span> Workspace / Environment scoped dashboard</div><h2><span id="heroEnv">PROD</span> command center for APIs, endpoints, traces, logs and RCA.</h2><p>Simple flow: Environment Overview → API / Service → Endpoint → Trace → Logs → AI RCA.</p></div>
-        <div class="card quick-actions"><div class="section-head"><h3>Quick Actions</h3><span>Environment scoped</span></div><input id="searchBox" placeholder="Search within selected environment..." /><div class="row"><button id="askRcaBtn">Ask AI RCA</button><button onclick="location.hash='alerts'">Open Incidents</button></div><textarea id="logUpload" placeholder='Paste JSON lines or raw log lines here, then click Upload Logs' rows="5"></textarea><button id="uploadBtn">Upload Logs</button></div>
+        <div class="card quick-actions"><div class="section-head"><h3>Quick Actions</h3><span>Environment scoped</span></div><input id="searchBox" placeholder="Search within selected environment..." /><div class="row"><button id="askRcaBtn">Ask AI RCA</button><button onclick="location.hash='alerts'">Open Incidents</button></div><div id="dropZone" class="drop-zone"><strong>Drag & drop log file</strong><small>JSONL or raw .log/.txt, scoped to selected environment</small></div><textarea id="logUpload" placeholder='Paste JSON lines or raw log lines here, then click Upload Logs' rows="5"></textarea><button id="uploadBtn">Upload Logs</button><a class="api-doc-link" href="#apiDocs">View ingestion API docs</a></div>
       </section>
       <section class="card"><div class="section-head"><h3>Simple Drilldown Flow</h3><span>No confusion, no mixed data</span></div><div class="flow-path"><div class="flow-step"><small>01</small><h4>Environment</h4><p>Start with PROD, UAT, DEV or DR.</p></div><div class="flow-step"><small>02</small><h4>API / Service</h4><p>Check health, owner, SLA, errors and version.</p></div><div class="flow-step"><small>03</small><h4>Endpoint</h4><p>Find exact method/path causing latency.</p></div><div class="flow-step"><small>04</small><h4>Trace + Logs</h4><p>Replay request journey and related logs.</p></div><div class="flow-step"><small>05</small><h4>AI RCA</h4><p>Root cause, impact and next action.</p></div></div></section>
       <section class="layout cards-5" id="metrics"></section>
@@ -40,8 +40,17 @@
       <section class="layout two-grid"><div class="card" id="traces"><div class="section-head"><h3>Trace Waterfall</h3><span>Request journey</span></div><div class="service-list" id="traceList"></div></div><div class="card" id="logs"><div class="section-head"><h3>Live Logs</h3><span>No cross-environment logs</span></div><div class="log-stream" id="logStream"></div></div></section>
       <section class="layout three-grid" id="ops"><div class="card" id="alerts"><div class="section-head"><h3>Alerts</h3><span>Grouped by environment</span></div><div class="alert-list" id="alertList"></div></div><div class="card"><div class="section-head"><h3>Deployments</h3><span>Before vs after</span></div><div class="alert-list" id="deploymentList"></div></div><div class="card"><div class="section-head"><h3>Ingestion</h3><span>S3 / API / Upload</span></div><div class="alert-list" id="ingestionList"></div></div></section>
       <section class="layout two-grid"><div class="card"><div class="section-head"><h3>Security & Masking</h3><span>Environment policies</span></div><div class="alert-list" id="securityList"></div></div><div class="card"><div class="section-head"><h3>Scalable Architecture</h3><span>Environment partitioned</span></div><div class="architecture"><div class="arch-box"><small>01</small><strong>Org / Workspace</strong><p>Tenant boundary.</p></div><div class="arch-box"><small>02</small><strong>Environment</strong><p>Mandatory partition.</p></div><div class="arch-box"><small>03</small><strong>Queue</strong><p>Async ingestion.</p></div><div class="arch-box"><small>04</small><strong>PostgreSQL</strong><p>Metadata + logs for starter.</p></div><div class="arch-box"><small>05</small><strong>S3 Archive</strong><p>Raw log archive.</p></div><div class="arch-box"><small>06</small><strong>Search Store</strong><p>Future ClickHouse/OpenSearch.</p></div><div class="arch-box"><small>07</small><strong>AI RCA</strong><p>Scoped RCA context.</p></div></div></div></section>
-    </main>
+    <section class="card" id="apiDocs"><div class="section-head"><h3>Log Ingestion API Documentation</h3><span>Production integration</span></div><div class="docs-grid"><div><h4>Raw/JSONL upload</h4><pre>POST /api/{workspace}/{environment}/logs/upload
+Authorization: Bearer &lt;INGEST_API_KEY&gt;
+Content-Type: text/plain
+
+{&quot;timestamp&quot;:&quot;2026-05-04T10:00:00Z&quot;,&quot;severity&quot;:&quot;ERROR&quot;,&quot;service&quot;:&quot;payment-api&quot;,&quot;trace_id&quot;:&quot;TR-1001&quot;,&quot;message&quot;:&quot;Timeout&quot;}</pre></div><div><h4>Structured JSON</h4><pre>POST /api/{workspace}/{environment}/logs
+Authorization: Bearer &lt;INGEST_API_KEY&gt;
+Content-Type: application/json
+
+[{ &quot;severity&quot;:&quot;WARN&quot;, &quot;service_name&quot;:&quot;bbps-api&quot;, &quot;method&quot;:&quot;POST&quot;, &quot;path&quot;:&quot;/bill/fetch&quot;, &quot;message&quot;:&quot;Partner latency&quot; }]</pre></div></div></section></main>
   </div>
+  <div id="toastHost" class="toast-host"></div>
   <script src="/app.js"></script>
 </body>
 </html>

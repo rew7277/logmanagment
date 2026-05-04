@@ -92,3 +92,20 @@ curl -X POST "https://your-app.railway.app/api/fsbl-prod-ops/PROD/logs" \
 ## Important product rule
 
 Never merge environments. Every log, trace, alert, deployment and RCA result must include `environment_id`.
+
+
+## Updated SaaS Enhancements
+
+This package now includes:
+
+- Light/dark theme toggle.
+- Sidebar open/close toggle.
+- Toast notifications instead of browser alerts.
+- Drag-and-drop log upload UI.
+- Environment-scoped log search using `GET /api/:workspace/:environment/logs?q=`.
+- PostgreSQL full-text search indexes for logs.
+- Database-derived endpoint metrics instead of misleading hardcoded values.
+- In-app ingestion API documentation.
+- Improved RCA evidence summary based on selected environment logs.
+
+See `SAAS_AUDIT_AND_ROADMAP.md` for the full product/security/architecture checklist.

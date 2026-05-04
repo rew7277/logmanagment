@@ -64,6 +64,8 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_logs_env_time ON log_events(environment_id, timestamp DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_logs_trace ON log_events(trace_id) WHERE trace_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_logs_severity ON log_events(environment_id, severity, timestamp DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_logs_message_fts ON log_events USING GIN (to_tsvector('simple', message))`,
+  `CREATE INDEX IF NOT EXISTS idx_logs_raw_gin ON log_events USING GIN (raw)`,
   `CREATE TABLE IF NOT EXISTS traces (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,

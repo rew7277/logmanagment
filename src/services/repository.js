@@ -112,18 +112,31 @@ export async function getServices(workspaceSlug, environmentName) {
 export async function getEndpoints(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return [];
+  if (!hasDatabase) {
+    return [
+      { method: 'POST', path: '/payment/status', service_name: 'payment-engine-api', status: 'degraded', calls_per_hour: 1840, error_rate: 5.1, p95_latency_ms: 842, backend_ms: 720 },
+      { method: 'POST', path: '/payment/initiate', service_name: 'payment-engine-api', status: 'healthy', calls_per_hour: 920, error_rate: 0.4, p95_latency_ms: 390, backend_ms: 240 }
+    ];
+  }
   const result = await query(
-    `SELECT ep.*, s.name service_name FROM endpoints ep
+    `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
+            count(le.*)::int calls_per_hour,
+            COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
+            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms,
+            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ((t.meta->>'backend_ms')::int)),0)::int backend_ms
+     FROM endpoints ep
      JOIN services s ON s.id=ep.service_id
+     LEFT JOIN log_events le ON le.endpoint_id=ep.id AND le.timestamp >= now() - interval '1 hour'
+     LEFT JOIN traces t ON t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours'
      WHERE s.environment_id=$1
+     GROUP BY ep.id, s.name
      ORDER BY s.name, ep.method, ep.path`,
     [env.id]
   );
   return result.rows;
 }
 
-export async function getLogs(workspaceSlug, environmentName, limit = 100) {
+export async function getLogs(workspaceSlug, environmentName, limit = 100, search = '') {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
   if (!hasDatabase) {
@@ -138,9 +151,10 @@ export async function getLogs(workspaceSlug, environmentName, limit = 100) {
      LEFT JOIN services s ON s.id=le.service_id
      LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
      WHERE le.environment_id=$1
+       AND ($3 = '' OR le.message ILIKE '%' || $3 || '%' OR le.trace_id ILIKE '%' || $3 || '%' OR s.name ILIKE '%' || $3 || '%' OR to_tsvector('simple', le.message) @@ plainto_tsquery('simple', $3))
      ORDER BY le.timestamp DESC
      LIMIT $2`,
-    [env.id, limit]
+    [env.id, limit, String(search || '').trim()]
   );
   return result.rows;
 }
@@ -283,16 +297,20 @@ export async function rca(workspaceSlug, environmentName, queryText = '') {
   const [overview, alerts, logs] = await Promise.all([
     getOverview(workspaceSlug, environmentName),
     getAlerts(workspaceSlug, environmentName),
-    getLogs(workspaceSlug, environmentName, 20)
+    getLogs(workspaceSlug, environmentName, 50, queryText)
   ]);
 
   const topError = logs.find((log) => ['ERROR', 'FATAL'].includes(log.severity));
+  const warnCount = logs.filter((log) => log.severity === 'WARN').length;
+  const errorCount = logs.filter((log) => ['ERROR', 'FATAL'].includes(log.severity)).length;
+  const affectedServices = [...new Set(logs.map((l) => l.service_name).filter(Boolean))].slice(0, 5);
   return {
     environment: environmentName,
     query: queryText,
     summary: `${environmentName} RCA is scoped to this environment only. Health: ${overview?.environment?.health_score ?? 'N/A'}, active alerts: ${overview?.metrics?.active_alerts ?? 0}.`,
-    likely_root_cause: topError ? topError.message : 'No critical error pattern found in the latest logs.',
+    likely_root_cause: topError ? topError.message : 'No critical error pattern found in the matched/latest logs.',
     impact: alerts.slice(0, 3).map((a) => a.title),
+    evidence: { matched_logs: logs.length, errors: errorCount, warnings: warnCount, affected_services: affectedServices },
     recommended_actions: [
       'Open the affected service and endpoint first.',
       'Inspect slow traces and backend latency split.',
