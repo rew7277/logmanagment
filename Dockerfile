@@ -4,7 +4,7 @@ FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
 # Raise Node heap so npm itself does not OOM on large dependency trees.
-# This was the root cause of "Exit handler never called!" in build logs.
+# Root cause of the original "Exit handler never called!" crash.
 ENV NODE_OPTIONS="--max-old-space-size=512" \
     NPM_CONFIG_AUDIT=false \
     NPM_CONFIG_FUND=false \
@@ -12,17 +12,15 @@ ENV NODE_OPTIONS="--max-old-space-size=512" \
     NPM_CONFIG_PROGRESS=false \
     NODE_ENV=production
 
-COPY package*.json ./
+# Copy only manifests — never the lockfile.
+# package-lock.json is excluded via .dockerignore so Docker always runs a
+# fresh `npm install`, resolving the latest compatible versions and avoiding
+# the EUSAGE "lockfile out of sync" failure that killed the previous build.
+# Once you run `npm install` locally and commit a fresh package-lock.json,
+# change this line to: COPY package.json package-lock.json ./
+COPY package.json ./
 
-# Use `npm ci` when a lockfile exists (reproducible, faster).
-# Falls back to `npm install` when no lockfile yet.
-RUN if [ -f package-lock.json ]; then \
-      echo "[docker] package-lock.json found — using npm ci"; \
-      npm ci --omit=dev --no-audit --no-fund; \
-    else \
-      echo "[docker] no lockfile — using npm install"; \
-      npm install --omit=dev --no-audit --no-fund; \
-    fi
+RUN npm install --omit=dev --no-audit --no-fund
 
 # ─── Stage 2: Lean production image ──────────────────────────────────────────
 FROM node:20-bookworm-slim AS runner
@@ -33,7 +31,7 @@ ENV NODE_ENV=production \
     NODE_OPTIONS="--max-old-space-size=256"
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY package*.json ./
+COPY package.json ./
 COPY src ./src
 COPY public ./public
 
