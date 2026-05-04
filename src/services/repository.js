@@ -261,7 +261,7 @@ async function upsertTraceFromLog(client, env, serviceId, endpointId, payload) {
   const status = ['ERROR','FATAL'].includes(String(payload.severity || '').toUpperCase()) ? 'error' : 'success';
   await client.query(
     `INSERT INTO traces(environment_id, service_id, endpoint_id, trace_id, status, latency_ms, started_at, meta)
-     VALUES($1,$2,$3,$4,$5,0,COALESCE($6, now()),$7)
+     VALUES($1::uuid,$2::uuid,$3::uuid,$4::text,$5::text,0,COALESCE($6::timestamptz, now()),$7::jsonb)
      ON CONFLICT(environment_id, trace_id) DO UPDATE SET
        service_id=COALESCE(traces.service_id, EXCLUDED.service_id),
        endpoint_id=COALESCE(traces.endpoint_id, EXCLUDED.endpoint_id),
@@ -316,7 +316,7 @@ async function _insertLog(client, env, payload) {
 
   const result = await client.query(
     `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, timestamp, severity, trace_id, message, raw)
-     VALUES($1,$2,$3,$4,$5,COALESCE($6, now()),$7,$8,$9,$10)
+     VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,COALESCE($6::timestamptz, now()),$7::text,$8::text,$9::text,$10::jsonb)
      RETURNING *`,
     [
       env.org_id, env.workspace_id, env.id,
@@ -346,31 +346,76 @@ export async function createLog(workspaceSlug, environmentName, payload) {
  * times (one per log). Now we look up the environment ONCE and wrap all inserts
  * in a single SERIALIZABLE transaction so bulk uploads are atomic.
  */
+
+function safeText(value, fallbackValue = null) {
+  if (value === undefined || value === null) return fallbackValue;
+  const text = String(value);
+  return text.length ? text : fallbackValue;
+}
+
+function safeUpper(value, fallbackValue = 'INFO') {
+  return String(value || fallbackValue).toUpperCase();
+}
+
+function safeTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return JSON.stringify({ message: 'raw payload could not be serialized' });
+  }
+}
+
+function chunkArray(items, size) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+const LOG_INSERT_CHUNK_SIZE = Number(process.env.LOG_INSERT_CHUNK_SIZE || 500);
+const TRACE_INSERT_CHUNK_SIZE = Number(process.env.TRACE_INSERT_CHUNK_SIZE || 500);
+
 export async function bulkCreateLogs(workspaceSlug, environmentName, logs, options = {}) {
   if (!Array.isArray(logs) || logs.length === 0) return [];
   logs = sanitizeParsedRecords(logs).filter(l => l && (l.message || l.raw));
   if (!logs.length) return [];
+
   if (!hasDatabase) {
-    const created = logs.map((l, i) => {
-      const row = {
-        id: `local-${Date.now()}-${i}`,
-        environment_name: environmentName,
-        timestamp: l.timestamp || new Date().toISOString(),
-        severity: String(l.severity || 'INFO').toUpperCase(),
-        trace_id: l.trace_id || null,
-        service_name: l.service_name || l.service || null,
-        method: l.method ? String(l.method).toUpperCase() : null,
-        path: l.path || l.endpoint || null,
-        message: l.message || String(l.raw || ''),
-        raw: l.raw || l,
-        upload_id: options.uploadId || null
-      };
-      return row;
-    });
+    const created = logs.map((l, i) => ({
+      id: `local-${Date.now()}-${i}`,
+      environment_name: environmentName,
+      timestamp: l.timestamp || new Date().toISOString(),
+      severity: safeUpper(l.severity),
+      trace_id: l.trace_id || l.event_id || l.correlation_id || l.raw?.event_id || null,
+      service_name: l.service_name || l.service || null,
+      method: l.method ? String(l.method).toUpperCase() : null,
+      path: l.path || l.endpoint || null,
+      message: l.message || String(l.raw || ''),
+      raw: l.raw || l,
+      upload_id: options.uploadId || null
+    }));
     fallback.logs.push(...created);
-    if (!options.uploadId) fallback.ingestion.unshift({ id:`local-upload-${Date.now()}`, source_type:'UPLOAD', source_name:options.sourceName || 'browser/API upload', status:'healthy', accepted_count:created.length, rejected_count:0, parser_errors:0, meta:{bytes:options.bytes||0}, created_at:new Date().toISOString() });
+    if (!options.uploadId) {
+      fallback.ingestion.unshift({
+        id:`local-upload-${Date.now()}`,
+        source_type:'UPLOAD',
+        source_name:options.sourceName || 'browser/API upload',
+        status:'completed',
+        accepted_count:created.length,
+        rejected_count:0,
+        parser_errors:0,
+        meta:{bytes:options.bytes||0},
+        created_at:new Date().toISOString()
+      });
+    }
     return created;
   }
+
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) throw new Error('Environment not found');
 
@@ -378,11 +423,15 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
     const serviceCache = new Map();
     const endpointCache = new Map();
 
-    const services = [...new Set(logs.map(l => l.service_name || l.service).filter(v => v && !String(v).toLowerCase().endsWith('.xml')))];
-    for (const name of services) {
+    const serviceNames = [...new Set(logs
+      .map(l => safeText(l.service_name || l.service))
+      .filter(v => v && !String(v).toLowerCase().endsWith('.xml'))
+    )];
+
+    for (const name of serviceNames) {
       const svc = await client.query(
         `INSERT INTO services(environment_id, name, status)
-         VALUES($1,$2,'observed')
+         VALUES($1::uuid,$2::text,'observed')
          ON CONFLICT(environment_id, name) DO UPDATE SET name=EXCLUDED.name
          RETURNING id`,
         [env.id, name]
@@ -392,11 +441,11 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
 
     const endpointKeys = [];
     for (const log of logs) {
-      const serviceName = (log.service_name || log.service);
-      if (serviceName && String(serviceName).toLowerCase().endsWith('.xml')) continue;
+      const serviceName = safeText(log.service_name || log.service);
+      if (!serviceName || serviceName.toLowerCase().endsWith('.xml')) continue;
       const serviceId = serviceCache.get(serviceName);
       const method = log.method ? String(log.method).toUpperCase() : null;
-      const logPath = log.path || log.endpoint || null;
+      const logPath = safeText(log.path || log.endpoint);
       if (serviceId && method && logPath) {
         const key = `${serviceId}|${method}|${logPath}`;
         if (!endpointCache.has(key)) {
@@ -405,10 +454,11 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
         }
       }
     }
+
     for (const epItem of endpointKeys) {
       const ep = await client.query(
         `INSERT INTO endpoints(service_id, method, path, status)
-         VALUES($1,$2,$3,'observed')
+         VALUES($1::uuid,$2::text,$3::text,'observed')
          ON CONFLICT(service_id, method, path) DO UPDATE SET path=EXCLUDED.path
          RETURNING id`,
         [epItem.serviceId, epItem.method, epItem.path]
@@ -416,77 +466,100 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
       endpointCache.set(epItem.key, ep.rows[0].id);
     }
 
-    const values = [];
-    const placeholders = [];
-    logs.forEach((payload, idx) => {
-      const rawServiceName = payload.service_name || payload.service || null;
-      const serviceName = rawServiceName && !String(rawServiceName).toLowerCase().endsWith('.xml') ? rawServiceName : null;
-      const serviceId = serviceCache.get(serviceName) || null;
-      const method = payload.method ? String(payload.method).toUpperCase() : null;
-      const logPath = payload.path || payload.endpoint || null;
-      const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
-      const base = idx * 11;
-      placeholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},COALESCE($${base+7}, now()),$${base+8},$${base+9},$${base+10},$${base+11})`);
-      values.push(
-        env.org_id, env.workspace_id, env.id,
-        serviceId, endpointId, options.uploadId || null,
-        payload.timestamp || null,
-        String(payload.severity || 'INFO').toUpperCase(),
-        payload.trace_id || null,
-        payload.message || String(payload.raw || ''),
-        JSON.stringify(payload)
+    const insertedRows = [];
+
+    for (const batch of chunkArray(logs, LOG_INSERT_CHUNK_SIZE)) {
+      const values = [];
+      const placeholders = [];
+
+      batch.forEach((payload, idx) => {
+        const rawServiceName = safeText(payload.service_name || payload.service);
+        const serviceName = rawServiceName && !rawServiceName.toLowerCase().endsWith('.xml') ? rawServiceName : null;
+        const serviceId = serviceName ? serviceCache.get(serviceName) || null : null;
+        const method = payload.method ? String(payload.method).toUpperCase() : null;
+        const logPath = safeText(payload.path || payload.endpoint);
+        const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
+        const traceId = safeText(payload.trace_id || payload.event_id || payload.correlation_id || payload.raw?.trace_id || payload.raw?.event_id || payload.raw?.correlation_id);
+        const message = safeText(payload.message, safeText(payload.raw, ''));
+
+        const base = idx * 11;
+        placeholders.push(`($${base+1}::uuid,$${base+2}::uuid,$${base+3}::uuid,$${base+4}::uuid,$${base+5}::uuid,$${base+6}::uuid,COALESCE($${base+7}::timestamptz, now()),$${base+8}::text,$${base+9}::text,$${base+10}::text,$${base+11}::jsonb)`);
+        values.push(
+          env.org_id,
+          env.workspace_id,
+          env.id,
+          serviceId,
+          endpointId,
+          options.uploadId || null,
+          safeTimestamp(payload.timestamp),
+          safeUpper(payload.severity),
+          traceId,
+          message,
+          safeJson(payload)
+        );
+      });
+
+      const result = await client.query(
+        `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, upload_id, timestamp, severity, trace_id, message, raw)
+         VALUES ${placeholders.join(',')}
+         RETURNING id, timestamp, severity, trace_id, message`,
+        values
       );
-    });
+      insertedRows.push(...result.rows);
+    }
 
-    const result = await client.query(
-      `INSERT INTO log_events(org_id, workspace_id, environment_id, service_id, endpoint_id, upload_id, timestamp, severity, trace_id, message, raw)
-       VALUES ${placeholders.join(',')}
-       RETURNING id, timestamp, severity, trace_id, message`,
-      values
-    );
-
-    // Fast trace rollup: old code upserted one trace per log row. That made uploads slow.
-    // This keeps one representative row per trace and performs one bulk upsert.
     const traceMap = new Map();
     for (const payload of logs) {
-      const traceId = payload.trace_id || payload.raw?.trace_id || payload.raw?.event_id || payload.raw?.correlation_id;
+      const traceId = safeText(payload.trace_id || payload.event_id || payload.correlation_id || payload.raw?.trace_id || payload.raw?.event_id || payload.raw?.correlation_id);
       if (!traceId) continue;
-      const rawServiceName = payload.service_name || payload.service || null;
-      const serviceName = rawServiceName && !String(rawServiceName).toLowerCase().endsWith('.xml') ? rawServiceName : null;
-      const serviceId = serviceCache.get(serviceName) || null;
+
+      const rawServiceName = safeText(payload.service_name || payload.service);
+      const serviceName = rawServiceName && !rawServiceName.toLowerCase().endsWith('.xml') ? rawServiceName : null;
+      const serviceId = serviceName ? serviceCache.get(serviceName) || null : null;
       const method = payload.method ? String(payload.method).toUpperCase() : null;
-      const logPath = payload.path || payload.endpoint || null;
+      const logPath = safeText(payload.path || payload.endpoint);
       const endpointId = serviceId && method && logPath ? endpointCache.get(`${serviceId}|${method}|${logPath}`) || null : null;
-      const severity = String(payload.severity || '').toUpperCase();
-      const status = ['ERROR','FATAL'].includes(severity) ? 'error' : 'success';
+      const status = ['ERROR','FATAL'].includes(safeUpper(payload.severity, '')) ? 'error' : 'success';
+      const startedAt = safeTimestamp(payload.timestamp);
       const existing = traceMap.get(traceId);
+
       if (!existing) {
-        traceMap.set(traceId, { traceId, serviceId, endpointId, status, startedAt: payload.timestamp || null, payload });
+        traceMap.set(traceId, { traceId, serviceId, endpointId, status, startedAt, payload, count: 1 });
       } else {
+        existing.count += 1;
         existing.status = existing.status === 'error' || status === 'error' ? 'error' : status;
         existing.serviceId = existing.serviceId || serviceId;
         existing.endpointId = existing.endpointId || endpointId;
-        if (payload.timestamp && (!existing.startedAt || new Date(payload.timestamp) < new Date(existing.startedAt))) existing.startedAt = payload.timestamp;
+        if (startedAt && (!existing.startedAt || new Date(startedAt) < new Date(existing.startedAt))) existing.startedAt = startedAt;
       }
     }
-    const traceItems = [...traceMap.values()];
-    if (traceItems.length) {
+
+    for (const traceBatch of chunkArray([...traceMap.values()], TRACE_INSERT_CHUNK_SIZE)) {
       const traceValues = [];
       const tracePlaceholders = [];
-      traceItems.forEach((t, idx) => {
+      traceBatch.forEach((t, idx) => {
         const base = idx * 8;
         const payload = t.payload || {};
-        tracePlaceholders.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},0,COALESCE($${base+6}, now()),$${base+7}::jsonb)`);
-        traceValues.push(env.id, t.serviceId, t.endpointId, t.traceId, t.status, t.startedAt || null, JSON.stringify({
-          event_id: payload.raw?.event_id || t.traceId,
-          correlation_id: payload.raw?.correlation_id || t.traceId,
-          transaction_id: payload.transaction_id || payload.raw?.transaction_id || null,
-          service_name: payload.service_name || payload.service || null,
-          method: payload.method || null,
-          path: payload.path || payload.endpoint || null,
-          rolled_up_events: logs.length
-        }));
+        tracePlaceholders.push(`($${base+1}::uuid,$${base+2}::uuid,$${base+3}::uuid,$${base+4}::text,$${base+5}::text,0,COALESCE($${base+6}::timestamptz, now()),$${base+7}::jsonb)`);
+        traceValues.push(
+          env.id,
+          t.serviceId || null,
+          t.endpointId || null,
+          t.traceId,
+          t.status,
+          t.startedAt || null,
+          safeJson({
+            event_id: payload.raw?.event_id || payload.event_id || t.traceId,
+            correlation_id: payload.raw?.correlation_id || payload.correlation_id || t.traceId,
+            transaction_id: payload.transaction_id || payload.raw?.transaction_id || null,
+            service_name: payload.service_name || payload.service || null,
+            method: payload.method || null,
+            path: payload.path || payload.endpoint || null,
+            rolled_up_events: t.count
+          })
+        );
       });
+
       await client.query(
         `INSERT INTO traces(environment_id, service_id, endpoint_id, trace_id, status, latency_ms, started_at, meta)
          VALUES ${tracePlaceholders.join(',')}
@@ -503,15 +576,14 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
     if (!options.uploadId) {
       await client.query(
         `INSERT INTO ingestion_jobs(environment_id, source_type, source_name, status, last_received_at, accepted_count, rejected_count, parser_errors, meta)
-         VALUES($1,'UPLOAD',$2,'completed',now(),$3,0,0,$4)`,
-        [env.id, options.sourceName || 'browser/API upload', result.rowCount, JSON.stringify({ batch_size: logs.length, bytes: options.bytes || 0 })]
+         VALUES($1::uuid,'UPLOAD',$2::text,'completed',now(),$3::int,0,0,$4::jsonb)`,
+        [env.id, options.sourceName || 'browser/API upload', insertedRows.length, safeJson({ batch_size: logs.length, bytes: options.bytes || 0 })]
       );
     }
 
-    return result.rows;
+    return insertedRows;
   });
 }
-
 
 
 export async function createUploadRecord(workspaceSlug, environmentName, { fileName='upload.log', bytes=0 } = {}) {
@@ -543,10 +615,10 @@ export async function updateUploadRecord(workspaceSlug, environmentName, uploadI
   const meta = { ...(current.rows[0].meta || {}), ...(patch.meta || {}) };
   const result = await query(
     `UPDATE ingestion_jobs SET
-       status=COALESCE($3,status),
-       accepted_count=COALESCE($4,accepted_count),
-       rejected_count=COALESCE($5,rejected_count),
-       parser_errors=COALESCE($6,parser_errors),
+       status=COALESCE($3::text,status),
+       accepted_count=COALESCE($4::int,accepted_count),
+       rejected_count=COALESCE($5::int,rejected_count),
+       parser_errors=COALESCE($6::int,parser_errors),
        last_received_at=now(),
        meta=$7::jsonb
      WHERE id=$1 AND environment_id=$2
