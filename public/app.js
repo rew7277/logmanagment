@@ -94,6 +94,7 @@ async function uploadBody(body,name='pasted logs'){
     toast(`Parsed ${fmt(res.parsed||res.inserted||0)} events, inserted ${fmt(res.inserted||0)} in ${sec}s`,'success');
     setText('uploadStatus',`Upload completed · ${fmt(res.inserted||0)} events · parser: ${esc(res.parser||'auto')} · ${sec}s`);
     if($('logUpload')) $('logUpload').value='';
+    if($('quickTime')) $('quickTime').value='all'; // ensure All time so just-uploaded logs are visible
     await Promise.allSettled([loadOverview(),loadServices(),loadEndpoints(),loadAlertsOps(),searchLogs(1)]);
     toast('Upload complete. Open Log Search to filter or inspect logs.','success');
   }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');}
