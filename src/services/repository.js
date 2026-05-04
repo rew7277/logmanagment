@@ -363,7 +363,10 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs) {
       const logPath = log.path || log.endpoint || null;
       if (serviceId && method && logPath) {
         const key = `${serviceId}|${method}|${logPath}`;
-        if (!endpointCache.has(key)) endpointKeys.push({ key, serviceId, method, path: logPath });
+        if (!endpointCache.has(key)) {
+          endpointCache.set(key, 'pending');
+          endpointKeys.push({ key, serviceId, method, path: logPath });
+        }
       }
     }
     for (const epItem of endpointKeys) {
