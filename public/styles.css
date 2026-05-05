@@ -323,3 +323,180 @@ body.light .ingest-error{background:rgba(220,38,38,.06);border-color:rgba(220,38
 .json-pre { color: #a5f3fc; }
 .copy-field { cursor: pointer; text-decoration: underline dotted; }
 .copy-field:hover { opacity: 0.8; }
+
+/* ═══════════════════════════════════════════════════════
+   V22 — Bug Fixes: Sidebar, Theme, Search Icon, Log Colors
+   ═══════════════════════════════════════════════════════ */
+
+/* ── FIX 1: Edge toggle — no longer collides with dark mode button ─────── 
+   Remove all the conflicting position rules from previous versions
+   and set one authoritative placement below the theme-toggle            */
+.edge-toggle {
+  position: absolute !important;
+  top: 148px !important;     /* below brand(~60px) + theme-toggle(~52px) + gap */
+  right: -19px !important;
+  left: auto !important;
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 0 12px 12px 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  background: var(--panel-solid) !important;
+  color: var(--primary) !important;
+  border: 1px solid var(--line) !important;
+  border-left: 0 !important;
+  box-shadow: 4px 0 18px rgba(15,23,42,.12) !important;
+  z-index: 30 !important;
+  transform: none !important;
+  cursor: pointer !important;
+}
+.edge-toggle svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 2.5 !important;
+  transition: transform .2s ease !important;
+}
+.app-shell.sidebar-collapsed .edge-toggle {
+  right: -19px !important;
+  top: 96px !important;   /* collapsed: brand only visible */
+  border-radius: 0 12px 12px 0 !important;
+  background: linear-gradient(135deg,var(--primary),var(--primary2)) !important;
+  color: #fff !important;
+  border: 0 !important;
+}
+.app-shell.sidebar-collapsed .edge-toggle svg {
+  transform: rotate(180deg) !important;
+}
+@media(max-width:760px){
+  .edge-toggle { position: fixed !important; top: 92px !important; left: 0 !important; right: auto !important; border-radius: 0 12px 12px 0 !important; }
+  .app-shell.sidebar-collapsed .edge-toggle { left: 0 !important; right: auto !important; top: 92px !important; }
+}
+
+/* ── FIX 2: Search icon — remove the CSS pseudo-element that duplicates it */
+.search-icon {
+  position: absolute !important;
+  left: 14px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 18px !important;
+  height: 18px !important;
+  pointer-events: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  /* Kill the ::after pseudo-element icon */
+  animation: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  font-size: 0 !important;
+  background: transparent !important;
+}
+.search-icon::after { display: none !important; }
+.search-icon svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke: var(--primary) !important;
+  fill: none !important;
+  stroke-width: 2 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+.search-control { position: relative; display: flex; align-items: center; }
+.search-control input { padding-left: 44px !important; }
+
+/* ── FIX 3: Full light + dark theme variables for log colors ────────────── */
+/* LIGHT theme — all log text must be dark and readable */
+:root {
+  --log-text:      #1e293b;
+  --log-text-meta: #475569;
+  --log-bg:        rgba(255,255,255,0.72);
+  --log-bg-hover:  rgba(248,250,252,0.95);
+  --log-svc-color: #0f172a;
+  --surface-1:     rgba(241,245,249,0.8);
+  --surface-2:     rgba(226,232,240,0.7);
+  --text-primary:  #0f172a;
+  --text-secondary:#334155;
+  --text-muted:    #64748b;
+}
+/* DARK theme overrides */
+html.dark {
+  --log-text:      #e2e8f0;
+  --log-text-meta: #94a3b8;
+  --log-bg:        rgba(15,23,42,0.72);
+  --log-bg-hover:  rgba(30,41,59,0.85);
+  --log-svc-color: #f1f5f9;
+  --surface-1:     rgba(255,255,255,0.04);
+  --surface-2:     rgba(255,255,255,0.08);
+  --text-primary:  #f1f5f9;
+  --text-secondary:#cbd5e1;
+  --text-muted:    #94a3b8;
+}
+
+/* ── FIX 3a: Apply theme vars to ALL log lines (v20 + v21) ──────────────── */
+.log-line {
+  background: var(--log-bg) !important;
+  color: var(--log-text) !important;
+}
+.log-line:hover { background: var(--log-bg-hover) !important; }
+.log-message {
+  color: var(--log-text) !important;
+}
+.log-meta {
+  color: var(--log-text-meta) !important;
+}
+/* v21 overrides — use theme vars */
+.log-line.v21 { background: var(--log-bg) !important; }
+.log-line.v21:hover { background: var(--log-bg-hover) !important; }
+.log-message.v21 { color: var(--log-text) !important; }
+.log-meta.v21 { color: var(--log-text-meta) !important; }
+.log-svc { color: var(--log-svc-color) !important; }
+.log-date { color: var(--log-text-meta) !important; }
+.log-ts { color: var(--log-text-meta) !important; }
+.log-path { color: var(--log-text-meta) !important; }
+
+/* severity level pills use theme vars */
+.level { color: var(--log-text-meta); background: rgba(148,163,184,.12); }
+.level.ERROR, .level.FATAL { color: var(--bad); background: rgba(220,38,38,.1); }
+.level.WARN  { color: var(--warn); background: rgba(217,119,6,.1); }
+.level.INFO  { color: var(--good); background: rgba(15,159,110,.1); }
+.level.DEBUG { color: var(--muted); background: rgba(148,163,184,.1); }
+
+/* ── FIX 3b: Analytics summary bar — theme aware ────────────────────────── */
+.log-analytics-bar {
+  background: var(--surface-1) !important;
+  border-color: var(--line) !important;
+}
+.lag-meta { color: var(--text-muted) !important; }
+
+/* ── FIX 3c: Modal — theme aware ────────────────────────────────────────── */
+.modal-section { background: var(--surface-1) !important; }
+.modal-section-title { color: var(--text-muted) !important; }
+.modal-pre { background: rgba(0,0,0,0.08) !important; color: var(--log-text) !important; }
+html.dark .modal-pre { background: rgba(0,0,0,0.35) !important; }
+.json-pre { color: var(--primary) !important; }
+html.dark .json-pre { color: #a5f3fc !important; }
+
+/* ── FIX 4: Services and endpoints page — readable in light ─────────────── */
+.svc-row { grid-template-columns: minmax(180px,2fr) 120px 110px 110px 90px !important; }
+.ep-table .row { grid-template-columns: 90px 1.8fr 100px 90px 90px 90px !important; }
+.ep-header-row { font-size: 11px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); font-weight: 900; background: var(--surface-1); border-radius: 10px; }
+.row { background: var(--log-bg) !important; color: var(--log-text) !important; }
+.row strong { color: var(--text-primary) !important; }
+.row small { color: var(--text-muted) !important; }
+
+/* ── FIX 5: ingest progress — readable in both themes ───────────────────── */
+.ingest-progress { color: var(--log-text) !important; }
+.ingest-top strong { color: var(--text-primary) !important; }
+.ingest-top small, .ingest-stats span { color: var(--text-muted) !important; }
+#ingestTelemetry { color: var(--text-muted) !important; background: var(--surface-1) !important; }
+
+/* ── FIX 6: theme-toggle — always at top of sidebar, no overlap ─────────── */
+.theme-toggle {
+  position: relative !important;
+  z-index: 1 !important;
+  margin-bottom: 12px !important;
+  width: 100% !important;
+}

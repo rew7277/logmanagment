@@ -38,7 +38,20 @@ function endpoint(path){return `/api/${state.workspace}/${state.environment}${pa
 async function api(url,opt={}){const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
 function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');localStorage.setItem('observex-theme',state.theme);$('themeIcon')&&($('themeIcon').textContent=state.theme==='dark'?'☀':'☾');}
 function applySidebar(){const closed=state.sidebar==='closed';$('appShell')&&$('appShell').classList.toggle('sidebar-collapsed',closed);localStorage.setItem('observex-sidebar',state.sidebar);}
-function setPage(page){state.page=(page==='traces'?'logs':(page||'overview'));$$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));const titles={overview:'Overview',apis:'APIs / Services',endpoints:'Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs'};setText('pageTitle',titles[state.page]||'Overview');$('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);if(state.page==='logs')searchLogs(1); if(state.page==='uploads')loadUploadHistory();}
+function setPage(page){
+  state.page=(page==='traces'?'logs':(page||'overview'));
+  $$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));
+  $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));
+  const titles={overview:'Overview',apis:'APIs / Services',endpoints:'Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs'};
+  setText('pageTitle',titles[state.page]||'Overview');
+  $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
+  if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
+  // Load page-specific data on navigation
+  if(state.page==='logs')    { searchLogs(1); loadServices(); loadEndpoints(); }
+  if(state.page==='apis')    { loadServices(); }
+  if(state.page==='endpoints'){ loadEndpoints(); }
+  if(state.page==='uploads') { loadUploadHistory(); }
+}
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
 function healthScore(m){const logs=Number(m.logs_ingested||0);if(!logs)return 0;const error=Number(m.error_rate||0);const latency=Number(m.p95_latency_ms||0);const alerts=Number(m.active_alerts||0);return Math.round(Math.max(0,Math.min(100,100-(error*2)-Math.max(0,latency-500)/100-(alerts*3))));}
@@ -66,8 +79,70 @@ async function loadOverview(){
     setHtml('infraGrid',[['Upload engine','Streaming'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
   }catch(e){toast(e.message,'error');}
 }
-async function loadServices(){const rows=await api(endpoint('/services'));const sf=$('serviceFilter');if(sf){const current=sf.value;sf.innerHTML='<option value="">All APIs / services</option>'+rows.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');sf.value=[...sf.options].some(o=>o.value===current)?current:'';}$('serviceList').innerHTML=rows.length?rows.map(s=>`<div class="row"><div><strong>${esc(s.name)}</strong><small>Auto-discovered from ingested logs</small></div><div><small>Status</small><b>${esc(s.status||'observed')}</b></div><div><small>Error events</small><b>${Number(s.error_rate||0).toFixed(2)}%</b></div><div><small>P95</small><b>${fmt(s.p95_latency_ms)}ms</b></div><div><small>Runtime</small><b>${esc(s.runtime_version||'-')}</b></div></div>`).join(''):empty('No services found yet. Upload Mule/generic logs to populate APIs automatically.');}
-async function loadEndpoints(){const rows=await api(endpoint('/endpoints'));const pf=$('pathFilter');if(pf){const current=pf.value;const seen=new Set();pf.innerHTML='<option value="">All endpoints</option>'+rows.filter(e=>e.path&&!seen.has(e.path)&&seen.add(e.path)).map(e=>`<option value="${esc(e.path)}">${esc((e.method||'')+' '+e.path)} · ${esc(e.service_name||'')}</option>`).join('');pf.value=[...pf.options].some(o=>o.value===current)?current:'';}$('endpointTable').innerHTML=rows.length?`<div class="table">${rows.map(e=>`<div class="row"><div><b>${esc(e.method||'-')}</b></div><div><strong>${esc(e.path||'-')}</strong><small>${esc(e.service_name||'service unknown')}</small></div><div><small>Status</small><b>${esc(e.status||'observed')}</b></div><div><small>Calls</small><b>${fmt(e.calls_total ?? e.calls_per_hour)}</b></div><div><small>Errors</small><b>${Number(e.error_rate||0).toFixed(2)}%</b></div><div><small>P95</small><b>${fmt(e.p95_latency_ms)}ms</b></div></div>`).join('')}</div>`:empty('No endpoints yet. Upload Mule logs or structured logs with method/path.');}
+async function loadServices(){
+  try {
+    const rows=await api(endpoint('/services'));
+    const sf=$('serviceFilter');
+    if(sf){
+      const current=sf.value;
+      sf.innerHTML='<option value="">All APIs / services</option>'+rows.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+      sf.value=[...sf.options].some(o=>o.value===current)?current:'';
+    }
+    const list = $('serviceList');
+    if(list) list.innerHTML = rows.length
+      ? rows.map(s=>{
+          const errRate = Number(s.error_rate||0);
+          const errColor = errRate>5?'var(--bad)':errRate>1?'var(--warn)':'var(--good)';
+          const health = Number(s.health_score||0);
+          return `<div class="row svc-row">
+            <div class="svc-main">
+              <strong>${esc(s.name)}</strong>
+              <small>Auto-discovered · ${esc(s.owner||'Unowned')}</small>
+            </div>
+            <div><small>Status</small><b class="status-badge ${esc(s.status||'observed')}">${esc(s.status||'observed')}</b></div>
+            <div><small>Error rate</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
+            <div><small>P95 latency</small><b>${fmt(s.p95_latency_ms)}ms</b></div>
+            <div><small>Health</small><b style="color:${health>=80?'var(--good)':health>=50?'var(--warn)':'var(--bad)'}">${health?health+'%':'—'}</b></div>
+          </div>`;
+        }).join('')
+      : empty('No services found yet. Upload Mule/generic logs to populate APIs automatically.');
+  } catch(e) { toast('Services: '+e.message,'error'); }
+}
+async function loadEndpoints(){
+  try {
+    const rows=await api(endpoint('/endpoints'));
+    const pf=$('pathFilter');
+    if(pf){
+      const current=pf.value;
+      const seen=new Set();
+      pf.innerHTML='<option value="">All endpoints</option>'+
+        rows.filter(e=>e.path&&!seen.has(e.path)&&seen.add(e.path))
+            .map(e=>`<option value="${esc(e.path)}">${esc((e.method||'')+' '+e.path)} · ${esc(e.service_name||'')}</option>`)
+            .join('');
+      pf.value=[...pf.options].some(o=>o.value===current)?current:'';
+    }
+    const tbl = $('endpointTable');
+    if(tbl) tbl.innerHTML = rows.length
+      ? `<div class="table ep-table">
+           <div class="row ep-header-row">
+             <div>Method</div><div>Path · Service</div><div>Status</div><div>Calls</div><div>Error %</div><div>P95</div>
+           </div>
+           ${rows.map(e=>{
+             const errRate=Number(e.error_rate||0);
+             const meth=(e.method||'?').toUpperCase();
+             return `<div class="row">
+               <div><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></div>
+               <div><strong>${esc(e.path||'-')}</strong><small>${esc(e.service_name||'unknown')}</small></div>
+               <div><span class="status-badge ${esc(e.status||'observed')}">${esc(e.status||'observed')}</span></div>
+               <div><b>${fmt(e.calls_total??e.calls_per_hour)}</b></div>
+               <div><b style="color:${errRate>5?'var(--bad)':errRate>1?'var(--warn)':'var(--good)'}">${errRate.toFixed(2)}%</b></div>
+               <div><b>${fmt(e.p95_latency_ms)}ms</b></div>
+             </div>`;
+           }).join('')}
+         </div>`
+      : empty('No endpoints yet. Upload Mule logs or structured logs with method/path.');
+  } catch(e) { toast('Endpoints: '+e.message,'error'); }
+}
 async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmt(t.latency_ms)}ms</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id are searchable; trace waterfall needs trace ingestion.');}
 
 function logParams(page=state.logPage){return new URLSearchParams({limit:String(state.logPageSize),page:String(page),q:$('logQuery')?.value||'',severity:$('severityFilter')?.value||'',service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',trace_id:state.traceFilter||'',upload_id:state.uploadFilter||'',range:$('quickTime')?.value||'all'});}
