@@ -4,33 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260505-v36" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-v28" />
 </head>
 <body>
-  <section id="authShell" class="auth-shell">
-    <div class="auth-orb one"></div><div class="auth-orb two"></div>
-    <div class="auth-card">
-      <div class="auth-brand"><div class="logo">OX</div><div><h1>ObserveX</h1><p>Secure workspace command center</p></div></div>
-      <div class="auth-tabs"><button id="showLogin" class="active" type="button">Login</button><button id="showRegister" type="button">Create account</button></div>
-      <div id="loginPane" class="auth-pane active">
-        <input id="loginWorkspace" placeholder="Workspace slug e.g. fsbl-prod-ops" value="fsbl-prod-ops"/>
-        <input id="loginEmail" type="email" placeholder="Email"/>
-        <input id="loginPassword" type="password" placeholder="Password"/>
-        <button id="loginBtn" type="button">Enter workspace</button>
-      </div>
-      <div id="registerPane" class="auth-pane">
-        <input id="regWorkspaceName" placeholder="Workspace name e.g. FSBL Production Ops"/>
-        <input id="regWorkspace" placeholder="Workspace slug e.g. fsbl-prod-ops" value="fsbl-prod-ops"/>
-        <input id="regName" placeholder="Your name"/>
-        <input id="regEmail" type="email" placeholder="Email"/>
-        <input id="regPassword" type="password" placeholder="Password min 8 characters"/>
-        <input id="regInvite" placeholder="Invitation code (not required for first admin)"/>
-        <button id="registerBtn" type="button">Create secure account</button>
-      </div>
-      <p class="auth-note">Passwords are stored as PBKDF2 hashes. User profile metadata is encrypted server-side with AES-256-GCM.</p>
-    </div>
-  </section>
-
   <div class="app-shell" id="appShell">
     <aside class="sidebar" id="sidebar">
       <!-- Sidebar header: brand + Claude-style toggle always visible -->
@@ -129,12 +105,6 @@
           <div class="card ops-card ai-provider-card"><div class="section-head"><h3>AI RCA Provider</h3><span>Local / OpenAI / Anthropic / Gemini</span></div><div class="ai-rca-grid"><div id="aiProviderInfo" class="ai-current-card"></div><div class="ai-config-card"><div class="form-grid two"><label>Provider<select id="aiProvider"><option value="local">Local rule engine</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select></label><label>Model<input id="aiModel" placeholder="gpt-4o-mini"/></label></div><label class="clean-check"><input id="aiEnabled" type="checkbox"/><span>Enable external AI calls</span></label><button id="saveAiProviderBtn" class="secondary full" type="button">Save RCA provider</button></div></div><div class="helper-note">API keys are never stored in the browser. Configure OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in Railway environment variables. Use Local mode when external AI is disabled.</div></div>
           
           <div class="card ops-card"><div class="section-head"><h3>Ingestion API Keys</h3><span>Workspace + environment scoped</span></div><div class="helper-note">Generate unique keys per organization/environment. The full key is shown only once; store it safely.</div><div id="ingestKeyList"></div><div class="config-form compact-config"><input id="newIngestKeyName" placeholder="Key name e.g. MuleSoft PROD"/><button id="createIngestKeyBtn" class="secondary" type="button">Generate key</button></div><pre id="newIngestKeyOutput" class="secret-output">Generated key will appear here once.</pre></div>
-
-          <div class="card ops-card"><div class="section-head"><h3>Audit Approval Workflow</h3><span>Controlled ops changes</span></div><div class="config-form compact-config"><input id="approvalAction" placeholder="Action e.g. Delete endpoint / Rotate key"/><input id="approvalEntity" placeholder="Entity e.g. API key / Policy"/><button id="createApprovalBtn" class="secondary" type="button">Request approval</button></div><div id="approvalList"></div></div>
-          <div class="card ops-card"><div class="section-head"><h3>Alert Notification Channels</h3><span>Webhook / email / Slack / Teams</span></div><div class="config-form compact-config"><input id="channelName" placeholder="Channel name e.g. Prod War Room"/><select id="channelType"><option value="webhook">Webhook</option><option value="email">Email</option><option value="slack">Slack</option><option value="teams">Teams</option></select><input id="channelTarget" placeholder="URL or email target"/><button id="saveChannelBtn" class="secondary" type="button">Save channel</button></div><div id="channelList"></div></div>
-          <div class="card ops-card"><div class="section-head"><h3>API Key Usage Analytics</h3><span>Ingestion key traffic</span></div><div id="keyUsageList"></div></div>
-          <div class="card ops-card"><div class="section-head"><h3>Live Logs</h3><span>WebSocket stream</span></div><div class="live-actions"><button id="connectLiveLogsBtn" class="secondary" type="button">Connect live logs</button><button id="disconnectLiveLogsBtn" class="secondary danger" type="button">Disconnect</button></div><div id="liveLogStream" class="live-log-stream"></div></div>
-          <div class="card ops-card"><div class="section-head"><h3>User & Role Settings</h3><span>Workspace invitations and RBAC</span></div><div id="currentUserCard" class="helper-note">Not logged in</div><div class="config-form compact-config"><select id="inviteRole"><option>developer</option><option>tester</option><option>manager</option><option>viewer</option><option>admin</option></select><input id="inviteMaxUses" type="number" min="1" value="1"/><button id="createInviteBtn" class="secondary" type="button">Create invite code</button></div><pre id="inviteOutput" class="secret-output">Invite code will appear once.</pre></div>
           <div class="card ops-card"><div class="section-head"><h3>Audit History</h3><span>Policy and key changes</span></div><div id="auditLogList"></div></div>          <div class="card ops-card"><div class="section-head"><h3>Ask AI RCA</h3><span>Useful investigation starters</span></div><div id="rcaPromptList"></div></div>
         </div>
       </section>
@@ -167,6 +137,6 @@
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v36"></script>
+  <script src="/app.js?v=20260505-v31"></script>
 </body>
 </html>

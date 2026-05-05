@@ -20,10 +20,7 @@ const state = {
   expandedApis: new Set(),
   aeQuery: '',
   services: [],
-  endpoints: [],
-  sessionToken: localStorage.getItem('observex-session-token') || '',
-  currentUser: null,
-  liveSocket: null
+  endpoints: []
 };
 
 const icons = {
@@ -46,7 +43,7 @@ function toast(msg, type='info'){const t=document.createElement('div');t.classNa
 function endpoint(path){return `/api/${state.workspace}/${state.environment}${path}`;}
 function apiBaseUrl(){return window.location.origin;}
 function fullEndpoint(path){return `${apiBaseUrl()}${endpoint(path)}`;}
-async function api(url,opt={}){opt.headers={...(opt.headers||{})}; if(state.sessionToken && !opt.headers.Authorization) opt.headers.Authorization=`Bearer ${state.sessionToken}`; const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
+async function api(url,opt={}){const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
 function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');localStorage.setItem('observex-theme',state.theme);$('themeIcon')&&($('themeIcon').textContent=state.theme==='dark'?'☀':'☾');}
 function applySidebar(){const closed=state.sidebar==='closed';$('appShell')&&$('appShell').classList.toggle('sidebar-collapsed',closed);localStorage.setItem('observex-sidebar',state.sidebar);}
 function setPage(page){
@@ -62,7 +59,7 @@ function setPage(page){
   if(state.page==='apis')    { loadApisEndpoints(); }
   if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
   if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
-  if(state.page==='ops') { loadAlertsOps(); loadEnvironmentConfig(); loadApprovals(); loadNotificationChannels(); loadKeyUsageAnalytics(); renderCurrentUser(); }
+  if(state.page==='ops') { loadAlertsOps(); }
   if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
@@ -522,75 +519,6 @@ async function loadAlertsOps(){try{
 }catch(e){console.warn(e);}}
 
 
-
-async function authRequest(path, payload){
-  const res=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const j=await res.json().catch(()=>({})); if(!res.ok) throw new Error(j.error||'Authentication failed'); return j.data||j;
-}
-async function login(){
-  const workspace=($('loginWorkspace')?.value||'fsbl-prod-ops').trim();
-  const data=await authRequest('/api/auth/login',{workspace_slug:workspace,email:$('loginEmail')?.value,password:$('loginPassword')?.value});
-  completeAuth(data);
-}
-async function register(){
-  const workspace=($('regWorkspace')?.value||'fsbl-prod-ops').trim();
-  const data=await authRequest('/api/auth/register',{workspace_slug:workspace,workspace_name:$('regWorkspaceName')?.value,full_name:$('regName')?.value,email:$('regEmail')?.value,password:$('regPassword')?.value,invitation_code:$('regInvite')?.value});
-  completeAuth(data);
-}
-function completeAuth(data){
-  state.sessionToken=data.token; state.currentUser=data.user; state.workspace=data.workspace?.slug||state.workspace;
-  localStorage.setItem('observex-session-token',state.sessionToken); localStorage.setItem('observex-workspace',state.workspace);
-  $('authShell')?.classList.add('hidden'); renderCurrentUser(); loadOverview(); toast(`Welcome ${data.user?.email||''}`,'success');
-}
-async function restoreSession(){
-  state.workspace=localStorage.getItem('observex-workspace')||state.workspace;
-  if(!state.sessionToken){ $('authShell')?.classList.remove('hidden'); return; }
-  try{ const r=await api('/api/auth/me'); state.currentUser=r; state.workspace=r.workspace_slug||state.workspace; $('authShell')?.classList.add('hidden'); renderCurrentUser(); }
-  catch{ localStorage.removeItem('observex-session-token'); state.sessionToken=''; $('authShell')?.classList.remove('hidden'); }
-}
-function canAdmin(){return ['admin','manager'].includes(state.currentUser?.role||'');}
-function renderCurrentUser(){
-  const el=$('currentUserCard'); if(el) el.innerHTML=state.currentUser?`Signed in as <b>${esc(state.currentUser.email)}</b> · role <b>${esc(state.currentUser.role)}</b> · workspace <b>${esc(state.workspace)}</b>`:'Not logged in';
-  document.body.classList.toggle('rbac-readonly', !!state.currentUser && !canAdmin());
-}
-async function createInvite(){
-  if(!canAdmin()) return toast('Admin or manager role required','error');
-  const row=await api(`/api/${state.workspace}/invitations`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:$('inviteRole')?.value||'developer',max_uses:Number($('inviteMaxUses')?.value||1)})});
-  if($('inviteOutput')) $('inviteOutput').textContent=`Copy now. Invite code is shown once:\n${row.code}\nRole: ${row.role}`;
-  toast('Invitation code created','success'); loadAuditLogs();
-}
-async function loadApprovals(){
-  const host=$('approvalList'); if(!host) return;
-  try{ const rows=await api(endpoint('/approvals')); host.innerHTML=rows.length?rows.map(a=>`<div class="approval-row"><div><b>${esc(a.action)}</b><small>${esc(a.entity_type)} · ${new Date(a.created_at).toLocaleString()} · ${esc(a.requested_by)}</small></div><span class="status-badge ${esc(a.status)}">${esc(a.status)}</span>${a.status==='pending'&&canAdmin()?`<div class="row-actions"><button class="mini-link approve" data-id="${esc(a.id)}">Approve</button><button class="mini-link danger reject" data-id="${esc(a.id)}">Reject</button></div>`:''}</div>`).join(''):empty('No approval requests yet.'); $$('.approve').forEach(b=>b.onclick=()=>decideApproval(b.dataset.id,'approved')); $$('.reject').forEach(b=>b.onclick=()=>decideApproval(b.dataset.id,'rejected')); }catch(e){host.innerHTML=empty('Approval workflow unavailable');}
-}
-async function createApproval(){
-  await api(endpoint('/approvals'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:$('approvalAction')?.value||'Ops change',entity_type:$('approvalEntity')?.value||'ops',payload:{environment:state.environment}})});
-  toast('Approval requested','success'); loadApprovals(); loadAuditLogs();
-}
-async function decideApproval(id, decision){ await api(endpoint(`/approvals/${id}/${decision}`),{method:'POST'}); toast(`Approval ${decision}`,'success'); loadApprovals(); loadAuditLogs(); }
-async function loadNotificationChannels(){
-  const host=$('channelList'); if(!host) return;
-  try{ const rows=await api(endpoint('/notification-channels')); host.innerHTML=rows.length?rows.map(c=>`<div class="channel-row"><div><b>${esc(c.name)}</b><small>${esc(c.channel_type)} · ${esc(c.enabled?'enabled':'disabled')}</small></div><code>${esc(c.target)}</code></div>`).join(''):empty('No notification channels. Add webhook, email, Slack or Teams target.'); }catch(e){host.innerHTML=empty('Notification channels unavailable');}
-}
-async function saveNotificationChannel(){
-  await api(endpoint('/notification-channels'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('channelName')?.value,channel_type:$('channelType')?.value,target:$('channelTarget')?.value,enabled:true})});
-  toast('Notification channel saved','success'); ['channelName','channelTarget'].forEach(id=>$(id)&&($(id).value='')); loadNotificationChannels(); loadAuditLogs();
-}
-async function loadKeyUsageAnalytics(){
-  const host=$('keyUsageList'); if(!host) return;
-  try{ const data=await api(endpoint('/ingest-key-usage')); host.innerHTML=`<div class="usage-summary"><b>${fmt(data.total_requests||0)}</b><span>requests</span><b>${fmt(data.bytes||0)}</b><span>bytes</span></div>`+(data.by_key||[]).map(k=>`<div class="usage-row"><b>${esc(k.key_name)}</b><small>${fmt(k.requests)} calls · last ${k.last_seen?new Date(k.last_seen).toLocaleString():'never'}</small></div>`).join('') || empty('No API key usage captured yet.'); }catch(e){host.innerHTML=empty('API key usage unavailable');}
-}
-function connectLiveLogs(){
-  const host=$('liveLogStream'); if(!host) return;
-  if(state.liveSocket) state.liveSocket.close();
-  const proto=location.protocol==='https:'?'wss':'ws';
-  const ws=new WebSocket(`${proto}://${location.host}/ws/live-logs?workspace=${encodeURIComponent(state.workspace)}&environment=${encodeURIComponent(state.environment)}`);
-  state.liveSocket=ws; host.innerHTML='<div class="live-line">Connecting...</div>';
-  ws.onmessage=(ev)=>{ const data=JSON.parse(ev.data); if(data.type==='logs'){ data.items.forEach(l=>{ const row=document.createElement('div'); row.className='live-line'; row.innerHTML=`<b>${esc(l.severity)}</b> <span>${new Date(l.timestamp).toLocaleTimeString()}</span> <code>${esc(l.service_name||'-')} ${esc(l.method||'')} ${esc(l.path||'')}</code> ${esc(String(l.message||'').slice(0,180))}`; host.prepend(row); }); } else if(data.type==='connected'||data.type==='heartbeat'){ const row=document.createElement('div'); row.className='live-line muted'; row.textContent=data.message||`heartbeat ${new Date().toLocaleTimeString()}`; host.prepend(row); } };
-  ws.onerror=()=>toast('Live log WebSocket error','error'); ws.onclose=()=>{ if(state.liveSocket===ws) state.liveSocket=null; };
-}
-function disconnectLiveLogs(){ if(state.liveSocket){ state.liveSocket.close(); state.liveSocket=null; toast('Live logs disconnected','info'); } }
-
 async function loadEnvironmentConfig(){
   try{
     const cfg = await api(endpoint('/config'));
@@ -936,6 +864,6 @@ async function deleteApiRegistry(payload){
   }catch(e){toast(e.message,'error');}
 }
 
-function bind(){if($('showLogin')) $('showLogin').onclick=()=>{ $('showLogin').classList.add('active'); $('showRegister')?.classList.remove('active'); $('loginPane')?.classList.add('active'); $('registerPane')?.classList.remove('active'); }; if($('showRegister')) $('showRegister').onclick=()=>{ $('showRegister').classList.add('active'); $('showLogin')?.classList.remove('active'); $('registerPane')?.classList.add('active'); $('loginPane')?.classList.remove('active'); }; if($('loginBtn')) $('loginBtn').onclick=()=>login().catch(e=>toast(e.message,'error')); if($('registerBtn')) $('registerBtn').onclick=()=>register().catch(e=>toast(e.message,'error')); if($('createInviteBtn')) $('createInviteBtn').onclick=()=>createInvite().catch(e=>toast(e.message,'error')); if($('createApprovalBtn')) $('createApprovalBtn').onclick=()=>createApproval().catch(e=>toast(e.message,'error')); if($('saveChannelBtn')) $('saveChannelBtn').onclick=()=>saveNotificationChannel().catch(e=>toast(e.message,'error')); if($('connectLiveLogsBtn')) $('connectLiveLogsBtn').onclick=connectLiveLogs; if($('disconnectLiveLogsBtn')) $('disconnectLiveLogsBtn').onclick=disconnectLiveLogs; Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
-(async function boot(){applyTheme();applySidebar();bind();await restoreSession();await initWorkspaces();setPage(state.page);await refreshAll();})();
+(async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

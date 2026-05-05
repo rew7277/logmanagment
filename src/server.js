@@ -9,7 +9,6 @@ import { fileURLToPath } from 'url';
 import apiRoutes from './routes/api.js';
 import { hasDatabase, query, closePool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
-import { WebSocketServer } from 'ws';
 import { seed } from './db/seed.js';
 
 dotenv.config();
@@ -161,39 +160,3 @@ server = app.listen(port, '0.0.0.0', () => {
   console.log(`[server] ObserveX running on 0.0.0.0:${port} (NODE_ENV=${process.env.NODE_ENV})`);
   runDatabaseStartupTasks();
 });
-
-// ─── Live logs over WebSocket ────────────────────────────────────────────────
-const liveLogServer = new WebSocketServer({ noServer: true });
-server.on('upgrade', (req, socket, head) => {
-  if (!req.url?.startsWith('/ws/live-logs')) return socket.destroy();
-  liveLogServer.handleUpgrade(req, socket, head, ws => liveLogServer.emit('connection', ws, req));
-});
-liveLogServer.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const workspace = url.searchParams.get('workspace') || 'fsbl-prod-ops';
-  const environment = url.searchParams.get('environment') || 'PROD';
-  let lastSeen = new Date(Date.now() - 60_000).toISOString();
-  ws.send(JSON.stringify({ type:'connected', workspace, environment, message:'Live log stream connected' }));
-  const timer = setInterval(async () => {
-    if (ws.readyState !== ws.OPEN) return;
-    try {
-      if (!hasDatabase) return ws.send(JSON.stringify({ type:'heartbeat', timestamp:new Date().toISOString(), demo:true }));
-      const r = await query(`SELECT l.id,l.timestamp,l.severity,l.message,s.name service_name,e.path,e.method,l.trace_id
-        FROM log_events l
-        JOIN environments env ON env.id=l.environment_id
-        JOIN workspaces w ON w.id=env.workspace_id
-        LEFT JOIN services s ON s.id=l.service_id
-        LEFT JOIN endpoints e ON e.id=l.endpoint_id
-        WHERE w.slug=$1 AND env.name=$2 AND l.created_at > $3
-        ORDER BY l.created_at ASC LIMIT 50`, [workspace, environment, lastSeen]);
-      if (r.rows.length) {
-        lastSeen = new Date().toISOString();
-        ws.send(JSON.stringify({ type:'logs', items:r.rows }));
-      } else {
-        ws.send(JSON.stringify({ type:'heartbeat', timestamp:new Date().toISOString() }));
-      }
-    } catch (error) { ws.send(JSON.stringify({ type:'error', error:error.message })); }
-  }, 3000);
-  ws.on('close', () => clearInterval(timer));
-});
-

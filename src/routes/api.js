@@ -21,7 +21,7 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem, registerUser, loginUser, getUserBySession, createInvitationCode, listApprovalRequests, createApprovalRequest, decideApprovalRequest, listNotificationChannels, upsertNotificationChannel, getApiKeyUsageAnalytics, recordApiKeyUsage
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -29,16 +29,6 @@ import { parseUploadText, isNewLogStart, parseLogBlock, createStreamingParser } 
 
 const router = express.Router();
 router.use(rateLimit({ maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), windowMs: 60_000 }));
-const asyncHandler = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-function bearer(req){ return (req.headers.authorization||'').replace(/^Bearer\s+/i,''); }
-async function actorFromReq(req){ try { return await getUserBySession(bearer(req)); } catch { return null; } }
-function requireRole(...roles){ return async (req,res,next)=>{ const u=await actorFromReq(req); if(!u) return res.status(401).json({error:'Login required'}); if(roles.length && !roles.includes(u.role)) return res.status(403).json({error:`${roles.join(' or ')} role required`}); req.user=u; next(); }; }
-
-router.post('/auth/register', asyncHandler(async (req,res)=> res.status(201).json({ data: await registerUser(req.body.workspace_slug || req.body.workspace || 'fsbl-prod-ops', { ...req.body, ip:req.ip }) })));
-router.post('/auth/login', asyncHandler(async (req,res)=> res.json({ data: await loginUser(req.body.workspace_slug || req.body.workspace || 'fsbl-prod-ops', req.body) })));
-router.get('/auth/me', asyncHandler(async (req,res)=> { const u=await actorFromReq(req); if(!u) return res.status(401).json({error:'Not logged in'}); res.json({ data:u }); }));
-
 const ingestLimit = rateLimit({ maxRequests: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), windowMs: 60_000 });
 
 const MAX_UPLOAD_BYTES  = Number(process.env.MAX_UPLOAD_BYTES  || 750 * 1024 * 1024);
@@ -232,6 +222,7 @@ async function processUploadedFile(job, filePath, workspace, environment) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+const asyncHandler          = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const normalizeEnvironment  = req => String(req.params.environment || req.query.environment || 'PROD').toUpperCase();
 const normalizeWorkspace    = req => String(req.params.workspace   || req.query.workspace   || 'fsbl-prod-ops');
 
@@ -571,14 +562,5 @@ router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(as
 
   res.status(201).json({ inserted, parsed, rejected, bytes, upload_id: uploadRecord?.id, parser: 'mule+generic', anomaly });
 }));
-
-
-router.post('/:workspace/invitations', requireRole('admin','manager'), asyncHandler(async (req,res)=> res.status(201).json({ data: await createInvitationCode(normalizeWorkspace(req), req.body, req.user?.email || 'system') })));
-router.get('/:workspace/:environment/approvals', asyncHandler(async (req,res)=> res.json({ data: await listApprovalRequests(normalizeWorkspace(req), normalizeEnvironment(req)) })));
-router.post('/:workspace/:environment/approvals', asyncHandler(async (req,res)=> { const u=await actorFromReq(req); res.status(201).json({ data: await createApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.body, u?.email || 'system') }); }));
-router.post('/:workspace/:environment/approvals/:id/:decision', requireRole('admin','manager'), asyncHandler(async (req,res)=> res.json({ data: await decideApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id, req.params.decision, req.user?.email || 'system') })));
-router.get('/:workspace/:environment/notification-channels', asyncHandler(async (req,res)=> res.json({ data: await listNotificationChannels(normalizeWorkspace(req), normalizeEnvironment(req)) })));
-router.post('/:workspace/:environment/notification-channels', asyncHandler(async (req,res)=> res.status(201).json({ data: await upsertNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.body) })));
-router.get('/:workspace/:environment/ingest-key-usage', asyncHandler(async (req,res)=> res.json({ data: await getApiKeyUsageAnalytics(normalizeWorkspace(req), normalizeEnvironment(req)) })));
 
 export default router;
