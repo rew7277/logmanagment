@@ -234,6 +234,22 @@ const statements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_ingest_api_keys_env ON ingest_api_keys(environment_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_ingest_api_keys_prefix ON ingest_api_keys(key_prefix)`
+,
+  `CREATE TABLE IF NOT EXISTS api_registry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    service_name TEXT NOT NULL,
+    method TEXT,
+    path TEXT,
+    entry_type TEXT NOT NULL DEFAULT 'endpoint' CHECK (entry_type IN ('service','endpoint')),
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','tombstone')),
+    status TEXT NOT NULL DEFAULT 'observed',
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`,
+  `CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`
+
 
 ];
 

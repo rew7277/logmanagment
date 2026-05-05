@@ -210,7 +210,15 @@ export async function getServices(workspaceSlug, environmentName) {
        ) x
      ) v ON true
      WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'
-     ORDER BY health_score ASC, s.name ASC`,
+       AND NOT EXISTS (SELECT 1 FROM api_registry ar WHERE ar.environment_id=$1 AND ar.service_name=s.name AND ar.source='tombstone' AND ar.deleted_at IS NOT NULL AND ar.entry_type='service')
+     UNION ALL
+     SELECT ar.id, ar.service_name AS name, 'Manual' AS owner, NULL AS runtime_version, NULL AS app_version, ar.status,
+            100 AS health_score, 0 AS calls_total, 0::numeric(7,2) AS error_rate, NULL::int AS p95_latency_ms,
+            0 AS calls_24h, 0 AS previous_calls_24h, NULL::numeric AS traffic_delta_pct, '[]'::json AS top_errors, NULL::timestamptz AS last_seen, '[]'::json AS volume_7d
+     FROM api_registry ar
+     WHERE ar.environment_id=$1 AND ar.entry_type='service' AND ar.source='manual' AND ar.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM services s2 WHERE s2.environment_id=$1 AND s2.name=ar.service_name)
+     ORDER BY health_score ASC, name ASC`,
     [env.id]
   );
   return result.rows;
@@ -263,7 +271,16 @@ export async function getEndpoints(workspaceSlug, environmentName, serviceName =
      ORDER BY s.name, ep.method, ep.path`,
     values
   );
-  return result.rows;
+  const autoRows = result.rows.filter(row => row.service_name && row.path);
+  const manual = await query(`SELECT id, COALESCE(method,'GET') AS method, COALESCE(path,'/') AS path, status, service_name,
+      0::int AS calls_total, 0::numeric(7,2) AS error_rate, NULL::int AS p95_latency_ms, 0::int AS backend_ms, NULL::timestamptz AS last_seen, '[]'::json AS top_errors
+      FROM api_registry WHERE environment_id=$1 AND entry_type='endpoint' AND source='manual' AND deleted_at IS NULL ${serviceName ? 'AND service_name=$2' : ''}`, values);
+  const tomb = await query(`SELECT service_name, method, path FROM api_registry WHERE environment_id=$1 AND source='tombstone' AND deleted_at IS NOT NULL`, [env.id]);
+  const tombKeys = new Set(tomb.rows.map(t => `${t.service_name}|${t.method || ''}|${t.path || ''}`));
+  const merged = [...autoRows, ...manual.rows].filter(ep => !tombKeys.has(`${ep.service_name}|${ep.method || ''}|${ep.path || ''}`));
+  const seen = new Set();
+  return merged.filter(ep => { const k=`${ep.service_name}|${ep.method}|${ep.path}`; if(seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a,b)=>String(a.service_name).localeCompare(String(b.service_name)) || String(a.path).localeCompare(String(b.path)));
 }
 
 export async function getLogs(workspaceSlug, environmentName, limit = 50, filters = '') {
@@ -1595,4 +1612,51 @@ export async function resetEnvironmentPolicy(workspaceSlug, environmentName) {
   if (!hasDatabase) return { reset: true, local_only: true };
   await query(`DELETE FROM environment_policies WHERE environment_id=$1`, [env.id]);
   return getEnvironmentConfig(workspaceSlug, environmentName);
+}
+
+
+export async function createManualApiEndpoint(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const service = String(payload.service_name || payload.service || '').trim();
+  const method = String(payload.method || 'GET').trim().toUpperCase();
+  const path = String(payload.path || '').trim();
+  const entryType = path ? 'endpoint' : 'service';
+  if (!service) throw new Error('API/service name is required');
+  if (entryType === 'endpoint' && !path.startsWith('/')) throw new Error('Endpoint path must start with /');
+  if (!hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}:manualApis`;
+    fallback.manualApis = fallback.manualApis || new Map();
+    const list = fallback.manualApis.get(key) || [];
+    const row = { id: `manual-${Date.now()}`, service_name: service, method, path, entry_type: entryType, status: 'observed', source: 'manual' };
+    list.unshift(row); fallback.manualApis.set(key, list); return row;
+  }
+  await query(`DELETE FROM api_registry WHERE environment_id=$1 AND service_name=$2 AND COALESCE(method,'')=COALESCE($3,'') AND COALESCE(path,'')=COALESCE($4,'') AND source='manual'`, [env.id, service, entryType === 'endpoint' ? method : null, entryType === 'endpoint' ? path : null]);
+  const result = await query(`INSERT INTO api_registry(environment_id, service_name, method, path, entry_type, source, status)
+    VALUES($1,$2,$3,$4,$5,'manual','observed') RETURNING *`, [env.id, service, entryType === 'endpoint' ? method : null, entryType === 'endpoint' ? path : null, entryType]);
+  await audit(env.id, 'create', 'api_registry', result.rows[0].id, null, result.rows[0]).catch(()=>{});
+  return result.rows[0];
+}
+
+export async function deleteApiRegistryItem(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const id = String(payload.id || '').trim();
+  const service = String(payload.service_name || payload.service || '').trim();
+  const method = String(payload.method || '').trim().toUpperCase();
+  const path = String(payload.path || '').trim();
+  const entryType = path ? 'endpoint' : 'service';
+  if (!id && !service) throw new Error('API/service details are required');
+  if (!hasDatabase) return { deleted: 1, tombstone: true };
+  let deleted = 0;
+  if (id) {
+    const d = await query(`UPDATE api_registry SET deleted_at=now() WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, id]);
+    deleted += d.rowCount || 0;
+  }
+  if (!deleted) {
+    await query(`DELETE FROM api_registry WHERE environment_id=$1 AND service_name=$2 AND COALESCE(method,'')=COALESCE($3,'') AND COALESCE(path,'')=COALESCE($4,'') AND source='tombstone'`, [env.id, service, entryType==='endpoint'?method:null, entryType==='endpoint'?path:null]);
+    await query(`INSERT INTO api_registry(environment_id, service_name, method, path, entry_type, source, status, deleted_at)
+      VALUES($1,$2,$3,$4,$5,'tombstone','deleted',now())`, [env.id, service, entryType==='endpoint'?method:null, entryType==='endpoint'?path:null, entryType]);
+    deleted = 1;
+  }
+  await audit(env.id, 'delete', 'api_registry', id || `${service} ${method} ${path}`, null, payload).catch(()=>{});
+  return { deleted, tombstone: true };
 }

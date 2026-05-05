@@ -21,7 +21,7 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -324,6 +324,16 @@ router.get('/:workspace/:environment/services', asyncHandler(async (req, res) =>
 router.get('/:workspace/:environment/endpoints', asyncHandler(async (req, res) =>
   res.json({ data: await getEndpoints(normalizeWorkspace(req), normalizeEnvironment(req), req.query.service || '') })
 ));
+
+
+router.post('/:workspace/:environment/api-registry', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await createManualApiEndpoint(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+
+router.delete('/:workspace/:environment/api-registry', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteApiRegistryItem(normalizeWorkspace(req), normalizeEnvironment(req), { ...(req.body || {}), ...(req.query || {}) }) })
+));
+
 
 router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50), 500);

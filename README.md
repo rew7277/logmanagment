@@ -191,3 +191,47 @@ Authorization: Bearer <INGEST_API_KEY>
 ```
 
 Recommended pattern: create separate keys for PROD, UAT, SIT, PERF, and revoke/rotate them independently.
+
+## V34 update notes
+
+### UI polish
+- AI RCA Provider card redesigned to avoid overflowing model fields and broken checkbox alignment.
+- Alerts and Ops cards now use theme variables so light mode no longer shows black/dark blocks.
+
+### Manual API / Endpoint catalogue
+- APIs & Endpoints now supports `+ Add API / Endpoint`.
+- Endpoint rows include `Delete` to hide that endpoint from the environment catalogue.
+- API accordion includes `Delete API` to hide an API from the selected environment.
+- Deletes are environment scoped and do not delete historical logs; logs remain searchable.
+
+### Backend API registry
+New routes:
+
+```http
+POST /api/:workspace/:environment/api-registry
+DELETE /api/:workspace/:environment/api-registry
+```
+
+Example create endpoint:
+
+```json
+{
+  "service_name": "s-paymentengine-api",
+  "method": "POST",
+  "path": "/payment/refund"
+}
+```
+
+Example create API only:
+
+```json
+{
+  "service_name": "s-new-api"
+}
+```
+
+After deployment run:
+
+```bash
+npm run db:migrate
+```
