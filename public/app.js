@@ -505,9 +505,7 @@ async function loadAlertsOps(){try{
   const security=o.security||o.security_events||[];
   if($('securityList')) $('securityList').innerHTML=(security.length?security:[{event_type:'PII masking policy',message:'Mask passwords, tokens, authorization headers, Aadhaar/PAN-like identifiers before indexing.',severity:'INFO',count:0},{event_type:'Header hygiene',message:'Store only required headers; redact cookies and secrets by default.',severity:'INFO',count:0}]).map(x=>`<div class="ops-row"><div><b>${esc(x.event_type)}</b><small>${esc(x.severity||'INFO')}</small></div><p>${esc(x.message)} ${x.count?`· ${fmt(x.count)} events`:''}</p></div>`).join('');
 
-  if($('policyList')) $('policyList').innerHTML=[
-    ['Retention','Keep PROD logs 30–90 days; archive raw files to S3 if needed.'],['Environment isolation','Never merge PROD/UAT/DEV analytics unless using compare screen.'],['Webhook routing','Send P1/P2 alerts to Slack/Teams using POST_ALERT_WEBHOOK_URL.'],['RBAC','Only admins can delete logs or change alert/security policies.']
-  ].map(([k,v])=>`<div class="policy-item"><b>${k}</b><p>${v}</p></div>`).join('');
+  await loadEnvironmentConfig();
 
   const prompts=['Why did error rate increase in last 24 hours?','Show top failing endpoint and likely Mule flow root cause.','Compare latest upload with previous logs and explain regression.','Find security/masking issues in recent ERROR logs.'];
   if($('rcaPromptList')) $('rcaPromptList').innerHTML=prompts.map(p=>`<button class="prompt-chip">${esc(p)}</button>`).join('');
@@ -515,7 +513,59 @@ async function loadAlertsOps(){try{
   $$('.prompt-chip').forEach(b=>b.onclick=()=>{setPage('rca');$('rcaQuery').value=b.textContent;runRca();});
 }catch(e){console.warn(e);}}
 
-async function runRca(){setPage('rca');const query=$('rcaQuery').value||'Analyze current environment issues';const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});$('rcaContent').innerHTML=`<div class="insight"><h4>${esc(data.likely_root_cause||'Environment RCA')}</h4><p>${esc(data.summary||'No summary')}</p></div>${(data.recommended_actions||data.recommendations||[]).map(r=>`<div class="insight"><b>Action</b><p>${esc(r)}</p></div>`).join('')}`;}
+
+async function loadEnvironmentConfig(){
+  try{
+    const cfg = await api(endpoint('/config'));
+    const p = cfg.policy || {};
+    if($('retentionDays')) $('retentionDays').value = p.retention_days ?? 30;
+    if($('rateLimitPerMin')) $('rateLimitPerMin').value = p.rate_limit_per_minute ?? 180;
+    if($('ingestRateLimitPerMin')) $('ingestRateLimitPerMin').value = p.ingest_rate_limit_per_minute ?? 30;
+    if($('archiveToS3')) $('archiveToS3').checked = !!p.archive_to_s3;
+    if($('policyList')) $('policyList').innerHTML = [
+      ['Retention', `${p.retention_days ?? 30} days${p.archive_to_s3 ? ' + S3 archive' : ''}`],
+      ['Rate limit', `${p.rate_limit_per_minute ?? 180}/min app, ${p.ingest_rate_limit_per_minute ?? 30}/min ingestion`],
+      ['Sources', (p.allowed_ingestion_sources || ['UPLOAD','API','S3']).join(', ')],
+      ['Environment isolation', `Current scope: ${state.environment}. Analytics are not merged across environments.`]
+    ].map(([k,v])=>`<div class="policy-item"><b>${esc(k)}</b><p>${esc(v)}</p></div>`).join('');
+    const rules = cfg.masking_rules || [];
+    if($('maskingRuleList')) $('maskingRuleList').innerHTML = rules.map(r=>`<div class="policy-item"><b>${esc(r.field_name)}</b><p>${esc(r.pattern || 'Field-name based masking')} → ${esc(r.replacement || '[MASKED]')} · ${r.enabled?'enabled':'disabled'}</p></div>`).join('') || empty('No masking rules configured yet.');
+    const rca = cfg.rca || {};
+    if($('aiProvider')) $('aiProvider').value = rca.provider || 'local';
+    if($('aiModel')) $('aiModel').value = rca.model || '';
+    if($('aiEnabled')) $('aiEnabled').checked = rca.enabled !== false;
+    if($('aiProviderInfo')) $('aiProviderInfo').innerHTML = `<div class="policy-item"><b>${esc(rca.provider || 'local')}</b><p>Model: ${esc(rca.model || 'local-rule-engine')}. API keys are read from environment variables, not stored in browser.</p></div>`;
+  }catch(e){ console.warn('config unavailable', e); }
+}
+
+async function saveEnvironmentPolicy(){
+  const payload={ policy:{ retention_days:Number($('retentionDays')?.value||30), archive_to_s3:!!$('archiveToS3')?.checked, rate_limit_per_minute:Number($('rateLimitPerMin')?.value||180), ingest_rate_limit_per_minute:Number($('ingestRateLimitPerMin')?.value||30), allowed_ingestion_sources:['UPLOAD','API','S3'] } };
+  await api(endpoint('/config'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  toast('Environment policy saved','success'); await loadEnvironmentConfig();
+}
+
+async function saveMaskRule(){
+  const field=$('maskFieldName')?.value?.trim(); if(!field) return toast('Enter business field name to mask','error');
+  const payload={ masking_rules:[{ field_name:field, pattern:$('maskPattern')?.value||null, replacement:$('maskReplacement')?.value||'[MASKED]', enabled:true }] };
+  await api(endpoint('/config'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  toast('Masking rule saved','success'); ['maskFieldName','maskPattern','maskReplacement'].forEach(id=>$(id)&&($(id).value='')); await loadEnvironmentConfig();
+}
+
+async function saveAiProvider(){
+  const payload={ rca:{ provider:$('aiProvider')?.value||'local', model:$('aiModel')?.value||'', enabled:!!$('aiEnabled')?.checked } };
+  await api(endpoint('/config'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  toast('AI RCA provider saved','success'); await loadEnvironmentConfig();
+}
+
+async function createCustomEnvironment(){
+  const name=$('newEnvironmentName')?.value?.trim(); if(!name) return toast('Enter environment name','error');
+  await api(`/api/${state.workspace}/environments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  localStorage.setItem('observex-extra-envs', JSON.stringify([...new Set([...getExtraEnvs(), name.toUpperCase().replace(/[^A-Z0-9_-]/g,'-')]) ]));
+  $('newEnvironmentName').value=''; toast('Environment added','success'); renderEnvButtons();
+}
+function getExtraEnvs(){try{return JSON.parse(localStorage.getItem('observex-extra-envs')||'[]')}catch{return []}}
+
+async function runRca(){setPage('rca');const query=$('rcaQuery').value||'Analyze current environment issues';const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});$('rcaContent').innerHTML=`<div class="insight"><h4>${esc(data.likely_root_cause||'Environment RCA')}</h4><p>${esc(data.summary||'No summary')}</p><small>RCA engine: ${esc(data.ai_provider||'local')} · ${esc(data.ai_model||'local-rule-engine')}</small></div>${data.ai_summary?`<div class="insight"><b>AI Analysis</b><p>${esc(data.ai_summary)}</p></div>`:''}${data.ai_error?`<div class="insight warn"><b>AI Provider Error</b><p>${esc(data.ai_error)}</p></div>`:''}${(data.recommended_actions||data.recommendations||[]).map(r=>`<div class="insight"><b>Action</b><p>${esc(r)}</p></div>`).join('')}`;}
 
 async function clearUploadedLogs(){
   const ok = confirm(`Delete all logs, discovered APIs/endpoints, traces, alerts and ingestion records for ${state.environment}? This is useful after a bad parser upload.`);
@@ -614,7 +664,7 @@ async function uploadBody(body,name='pasted logs'){
     await Promise.allSettled([loadUploadHistory(), loadOverview()]);}
 }
 
-function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function renderEnvButtons(){const host=$('envButtons'); if(!host) return; const envs=[...new Set(['PROD','UAT','DEV','DR',...getExtraEnvs()])]; host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item"><b>${esc(env)}</b><p>${env===state.environment?'Currently selected':'Available environment scope'}</p></div>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

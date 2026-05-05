@@ -19,7 +19,7 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS environments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    name TEXT NOT NULL CHECK (name IN ('PROD','UAT','DEV','DR')),
+    name TEXT NOT NULL,
     display_name TEXT NOT NULL,
     health_score NUMERIC(5,2) NOT NULL DEFAULT 100,
     status TEXT NOT NULL DEFAULT 'healthy',
@@ -164,7 +164,47 @@ const statements = [
   `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS threshold NUMERIC(12,3)`,
   `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS fingerprint TEXT`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_env_fingerprint_open ON alerts(environment_id, fingerprint) WHERE status='open' AND fingerprint IS NOT NULL`
-
+,
+  `DO $$
+   DECLARE r record;
+   BEGIN
+     FOR r IN SELECT conname FROM pg_constraint WHERE conrelid='environments'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%PROD%UAT%DEV%DR%'
+     LOOP EXECUTE 'ALTER TABLE environments DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname); END LOOP;
+   EXCEPTION WHEN undefined_table THEN NULL;
+   END $$`,
+  `CREATE TABLE IF NOT EXISTS environment_policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL UNIQUE REFERENCES environments(id) ON DELETE CASCADE,
+    retention_days INTEGER NOT NULL DEFAULT 30,
+    archive_to_s3 BOOLEAN NOT NULL DEFAULT false,
+    max_upload_mb INTEGER NOT NULL DEFAULT 750,
+    rate_limit_per_minute INTEGER NOT NULL DEFAULT 180,
+    ingest_rate_limit_per_minute INTEGER NOT NULL DEFAULT 30,
+    allowed_ingestion_sources TEXT[] NOT NULL DEFAULT ARRAY['UPLOAD','API','S3'],
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS masking_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    pattern TEXT,
+    replacement TEXT NOT NULL DEFAULT '[MASKED]',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, field_name)
+  )`,
+  `CREATE TABLE IF NOT EXISTS rca_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL UNIQUE REFERENCES environments(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL DEFAULT 'local',
+    model TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_masking_rules_env_enabled ON masking_rules(environment_id, enabled)`
 ];
 
 export async function migrate() {

@@ -477,6 +477,39 @@ function signatureSql(alias = 'le') {
   return `COALESCE(NULLIF(${alias}.raw->>'error_type',''), NULLIF(${alias}.raw->>'exception',''), NULLIF(${alias}.raw->'payload'->>'errorType',''), NULLIF(${alias}.raw->'analytics'->>'http_status',''), regexp_replace(left(${alias}.message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error')`;
 }
 
+function applyMaskingRulesToPayload(payload, rules = []) {
+  if (!rules.length) return payload;
+  let text = JSON.stringify(payload ?? {});
+  let message = String(payload?.message ?? '');
+  for (const rule of rules) {
+    if (rule.enabled === false) continue;
+    const replacement = rule.replacement || '[MASKED]';
+    try {
+      if (rule.pattern) {
+        const re = new RegExp(rule.pattern, 'gi');
+        text = text.replace(re, replacement);
+        message = message.replace(re, replacement);
+      } else if (rule.field_name) {
+        const f = String(rule.field_name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`("${f}"\\s*:\\s*")([^"]+)(")`, 'gi');
+        text = text.replace(re, `$1${replacement}$3`);
+      }
+    } catch { /* ignore invalid business regex instead of breaking ingestion */ }
+  }
+  try { return { ...JSON.parse(text), message: message || payload.message }; } catch { return { ...payload, message }; }
+}
+
+async function loadMaskingRulesForEnv(env) {
+  const defaults = [
+    { field_name:'password', pattern:'password\\s*[:=]\\s*[^,\\s]+', replacement:'password=[MASKED]', enabled:true },
+    { field_name:'authorization', pattern:'authorization\\s*[:=]\\s*bearer\\s+[^,\\s]+', replacement:'Authorization: Bearer [MASKED]', enabled:true },
+    { field_name:'token', pattern:'(token|secret|api[_-]?key)\\s*[:=]\\s*[^,\\s]+', replacement:'$1=[MASKED]', enabled:true }
+  ];
+  if (!hasDatabase || !env?.id) return defaults;
+  const rows = await query(`SELECT field_name, pattern, replacement, enabled FROM masking_rules WHERE environment_id=$1 AND enabled=true`, [env.id]).catch(() => ({ rows: [] }));
+  return rows.rows.length ? rows.rows : defaults;
+}
+
 function chunkArray(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -524,6 +557,8 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
 
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) throw new Error('Environment not found');
+  const maskingRules = await loadMaskingRulesForEnv(env);
+  logs = logs.map(l => applyMaskingRulesToPayload(l, maskingRules));
 
   return withTransaction(async (client) => {
     const serviceCache = new Map();
@@ -883,34 +918,53 @@ export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
 
 export async function getErrorGroups(workspaceSlug, environmentName, filters = {}) {
   const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!env) return [];
-  if (!hasDatabase) return [];
+  if (!env || !hasDatabase) return [];
   const values = [env.id];
   const where = [`le.environment_id=$1`, `le.severity IN ('ERROR','FATAL')`];
-  const add = (sql, value) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
-  if (filters.service) add('s.name = ?', String(filters.service));
-  if (filters.path) add('ep.path = ?', String(filters.path));
+  const add = (sql, value) => { if (value !== undefined && value !== null && String(value).trim() !== '') { values.push(String(value)); where.push(sql.replace('?', `$${values.length}`)); } };
+  add('s.name = ?', filters.service);
+  add('ep.path = ?', filters.path);
   if (filters.range && filters.range !== 'all') {
     const interval = filters.range === '1h' ? '1 hour' : filters.range === '7d' ? '7 days' : filters.range === '30d' ? '30 days' : '24 hours';
     where.push(`le.timestamp >= now() - interval '${interval}'`);
   }
   const sig = signatureSql('le');
-  const result = await query(
-    `SELECT ${sig} AS signature,
-            count(*)::int AS occurrences,
-            max(le.timestamp) AS last_seen,
-            min(le.timestamp) AS first_seen,
-            array_remove(array_agg(DISTINCT s.name), NULL)[1:5] AS services,
-            array_remove(array_agg(DISTINCT ep.path), NULL)[1:5] AS endpoints,
-            max(le.message) AS sample_message
-     FROM log_events le
-     LEFT JOIN services s ON s.id=le.service_id
-     LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
-     WHERE ${where.join(' AND ')}
-     GROUP BY signature
-     ORDER BY occurrences DESC, last_seen DESC
-     LIMIT 25`, values);
-  return result.rows;
+  try {
+    const result = await query(
+      `SELECT ${sig} AS signature,
+              count(*)::int AS occurrences,
+              max(le.timestamp) AS last_seen,
+              min(le.timestamp) AS first_seen,
+              (array_remove(array_agg(DISTINCT s.name), NULL))[1:5] AS services,
+              (array_remove(array_agg(DISTINCT ep.path), NULL))[1:5] AS endpoints,
+              max(le.message) AS sample_message
+       FROM log_events le
+       LEFT JOIN services s ON s.id=le.service_id
+       LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY signature
+       ORDER BY occurrences DESC, last_seen DESC
+       LIMIT 25`, values);
+    return result.rows;
+  } catch (error) {
+    console.warn('[error-groups] primary query failed, using safe fallback:', error.message);
+    const fallbackResult = await query(
+      `SELECT COALESCE(NULLIF(left(le.message, 120), ''), 'Unknown error') AS signature,
+              count(*)::int AS occurrences,
+              max(le.timestamp) AS last_seen,
+              min(le.timestamp) AS first_seen,
+              ARRAY[]::text[] AS services,
+              ARRAY[]::text[] AS endpoints,
+              max(le.message) AS sample_message
+       FROM log_events le
+       LEFT JOIN services s ON s.id=le.service_id
+       LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY signature
+       ORDER BY occurrences DESC, last_seen DESC
+       LIMIT 25`, values);
+    return fallbackResult.rows;
+  }
 }
 
 export async function getDeployImpact(workspaceSlug, environmentName) {
@@ -1045,11 +1099,43 @@ export async function createSavedSearch(workspaceSlug, environmentName, name, fi
   return result.rows[0];
 }
 
+async function getRcaSettings(env) {
+  const provider = String(process.env.AI_PROVIDER || '').trim().toLowerCase() || 'local';
+  const model = process.env.AI_MODEL || (provider === 'openai' ? 'gpt-4o-mini' : provider === 'anthropic' ? 'claude-3-5-haiku-latest' : provider === 'gemini' ? 'gemini-1.5-flash' : 'local-rule-engine');
+  if (!hasDatabase || !env?.id) return { provider, model, enabled: provider !== 'local' };
+  const existing = await query(`SELECT provider, model, enabled FROM rca_settings WHERE environment_id=$1`, [env.id]).catch(() => ({ rows: [] }));
+  return existing.rows[0] || { provider, model, enabled: provider !== 'local' };
+}
+
+async function callAiProvider(settings, prompt) {
+  const provider = String(settings?.provider || 'local').toLowerCase();
+  const model = settings?.model || process.env.AI_MODEL;
+  if (provider === 'openai' && process.env.OPENAI_API_KEY) {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OPENAI_API_KEY}`}, body: JSON.stringify({ model: model || 'gpt-4o-mini', messages:[{role:'system',content:'You are an observability RCA assistant. Be concise, evidence-based, and production-safe.'},{role:'user',content:prompt}], temperature:0.2 }) });
+    if (!res.ok) throw new Error(`OpenAI RCA failed: ${res.status}`);
+    const data = await res.json(); return data.choices?.[0]?.message?.content || '';
+  }
+  if (provider === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body: JSON.stringify({ model: model || 'claude-3-5-haiku-latest', max_tokens:700, temperature:0.2, messages:[{role:'user',content:prompt}] }) });
+    if (!res.ok) throw new Error(`Anthropic RCA failed: ${res.status}`);
+    const data = await res.json(); return (data.content || []).map(x => x.text || '').join('\n');
+  }
+  if (provider === 'gemini' && process.env.GEMINI_API_KEY) {
+    const geminiModel = model || 'gemini-1.5-flash';
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${process.env.GEMINI_API_KEY}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ contents:[{parts:[{text:prompt}]}] }) });
+    if (!res.ok) throw new Error(`Gemini RCA failed: ${res.status}`);
+    const data = await res.json(); return data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('\n') || '';
+  }
+  return '';
+}
+
 export async function rca(workspaceSlug, environmentName, queryText = '') {
-  const [overview, alerts, logs] = await Promise.all([
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const [overview, alerts, logs, errorGroups] = await Promise.all([
     getOverview(workspaceSlug, environmentName),
     getAlerts(workspaceSlug, environmentName),
-    getLogs(workspaceSlug, environmentName, 50, queryText)
+    getLogs(workspaceSlug, environmentName, 50, { q: queryText, range: '24h' }),
+    getErrorGroups(workspaceSlug, environmentName, { range: '24h' }).catch(() => [])
   ]);
 
   const logRows = Array.isArray(logs) ? logs : (logs.items || []);
@@ -1057,20 +1143,31 @@ export async function rca(workspaceSlug, environmentName, queryText = '') {
   const warnCount = logRows.filter((log) => log.severity === 'WARN').length;
   const errorCount = logRows.filter((log) => ['ERROR', 'FATAL'].includes(log.severity)).length;
   const affectedServices = [...new Set(logRows.map((l) => l.service_name).filter(Boolean))].slice(0, 5);
-  return {
+  const settings = await getRcaSettings(env);
+  const base = {
     environment: environmentName,
     query: queryText,
+    ai_provider: settings.provider || 'local',
+    ai_model: settings.model || 'local-rule-engine',
     summary: `${environmentName} RCA is scoped to this environment only. Health: ${overview?.environment?.health_score ?? 'N/A'}, active alerts: ${overview?.metrics?.active_alerts ?? 0}.`,
-    likely_root_cause: topError ? topError.message : 'No critical error pattern found in the matched/latest logs.',
+    likely_root_cause: topError ? topError.message : (errorGroups[0]?.sample_message || 'No critical error pattern found in the matched/latest logs.'),
     impact: alerts.slice(0, 3).map((a) => a.title),
-    evidence: { matched_logs: logRows.length, errors: errorCount, warnings: warnCount, affected_services: affectedServices },
+    evidence: { matched_logs: logRows.length, errors: errorCount, warnings: warnCount, affected_services: affectedServices, top_error_groups: errorGroups.slice(0, 5) },
     recommended_actions: [
       'Open the affected service and endpoint first.',
       'Inspect slow traces and backend latency split.',
-      'Validate recent deployment impact for the same environment only.',
-      'Do not compare or merge logs from other environments unless using an explicit compare screen.'
+      'Validate recent deployment/upload impact for the same environment only.',
+      'Check masking/security policy hits before sharing logs externally.'
     ]
   };
+  const prompt = `Environment: ${environmentName}\nQuestion: ${queryText}\nOverview: ${JSON.stringify(overview?.metrics || {})}\nAlerts: ${JSON.stringify(alerts.slice(0,5))}\nError groups: ${JSON.stringify(errorGroups.slice(0,5))}\nRecent logs: ${JSON.stringify(logRows.slice(0,10).map(l=>({severity:l.severity,service:l.service_name,path:l.path,message:l.message,timestamp:l.timestamp})))}\nReturn RCA with root cause, evidence, impact, recommended actions.`;
+  try {
+    const ai = settings.enabled ? await callAiProvider(settings, prompt) : '';
+    if (ai) return { ...base, ai_summary: ai, likely_root_cause: ai.split('\n').find(Boolean) || base.likely_root_cause };
+  } catch (error) {
+    return { ...base, ai_error: error.message, recommended_actions: [`AI provider failed (${error.message}); using local RCA.`, ...base.recommended_actions] };
+  }
+  return base;
 }
 
 
@@ -1210,4 +1307,63 @@ export async function evaluateAlertRules(workspaceSlug, environmentName) {
     }
   }
   return { checked, created: created.length, alerts: created };
+}
+
+
+export async function getEnvironmentConfig(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const defaultConfig = {
+    environment: env?.name || environmentName,
+    policy: { retention_days: 30, archive_to_s3: false, max_upload_mb: 750, rate_limit_per_minute: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), ingest_rate_limit_per_minute: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), allowed_ingestion_sources: ['UPLOAD','API','S3'], notes: '' },
+    masking_rules: [
+      { field_name: 'password', pattern: '(?i)password\\s*[:=]\\s*[^,\\s]+', replacement: 'password=[MASKED]', enabled: true },
+      { field_name: 'authorization', pattern: '(?i)authorization\\s*[:=]\\s*bearer\\s+[^,\\s]+', replacement: 'Authorization: Bearer [MASKED]', enabled: true },
+      { field_name: 'token', pattern: '(?i)(token|secret|api[_-]?key)\\s*[:=]\\s*[^,\\s]+', replacement: '$1=[MASKED]', enabled: true }
+    ],
+    rca: { provider: process.env.AI_PROVIDER || 'local', model: process.env.AI_MODEL || 'local-rule-engine', enabled: Boolean(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY) }
+  };
+  if (!env || !hasDatabase) return defaultConfig;
+  const [policy, masking, rcaCfg] = await Promise.all([
+    query(`INSERT INTO environment_policies(environment_id) VALUES($1) ON CONFLICT(environment_id) DO NOTHING; SELECT * FROM environment_policies WHERE environment_id=$1`, [env.id]).catch(() => ({ rows: [] })),
+    query(`SELECT id, field_name, pattern, replacement, enabled FROM masking_rules WHERE environment_id=$1 ORDER BY created_at ASC`, [env.id]).catch(() => ({ rows: [] })),
+    query(`INSERT INTO rca_settings(environment_id, provider, model, enabled) VALUES($1,$2,$3,$4) ON CONFLICT(environment_id) DO NOTHING; SELECT provider, model, enabled FROM rca_settings WHERE environment_id=$1`, [env.id, defaultConfig.rca.provider, defaultConfig.rca.model, defaultConfig.rca.enabled]).catch(() => ({ rows: [] }))
+  ]);
+  return { environment: env.name, policy: policy.rows?.at?.(-1) || defaultConfig.policy, masking_rules: masking.rows.length ? masking.rows : defaultConfig.masking_rules, rca: rcaCfg.rows?.at?.(-1) || defaultConfig.rca };
+}
+
+export async function updateEnvironmentConfig(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return null;
+  if (!hasDatabase) return { ok: true, local_only: true, config: payload };
+  const p = payload.policy || {};
+  if (payload.policy) {
+    await query(`INSERT INTO environment_policies(environment_id, retention_days, archive_to_s3, max_upload_mb, rate_limit_per_minute, ingest_rate_limit_per_minute, allowed_ingestion_sources, notes, updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,now())
+      ON CONFLICT(environment_id) DO UPDATE SET retention_days=EXCLUDED.retention_days, archive_to_s3=EXCLUDED.archive_to_s3, max_upload_mb=EXCLUDED.max_upload_mb,
+      rate_limit_per_minute=EXCLUDED.rate_limit_per_minute, ingest_rate_limit_per_minute=EXCLUDED.ingest_rate_limit_per_minute, allowed_ingestion_sources=EXCLUDED.allowed_ingestion_sources, notes=EXCLUDED.notes, updated_at=now()`,
+      [env.id, Number(p.retention_days || 30), Boolean(p.archive_to_s3), Number(p.max_upload_mb || 750), Number(p.rate_limit_per_minute || 180), Number(p.ingest_rate_limit_per_minute || 30), p.allowed_ingestion_sources || ['UPLOAD','API','S3'], p.notes || null]);
+  }
+  if (Array.isArray(payload.masking_rules)) {
+    for (const r of payload.masking_rules) {
+      const name = String(r.field_name || '').trim(); if (!name) continue;
+      await query(`INSERT INTO masking_rules(environment_id, field_name, pattern, replacement, enabled)
+        VALUES($1,$2,$3,$4,$5)
+        ON CONFLICT(environment_id, field_name) DO UPDATE SET pattern=EXCLUDED.pattern, replacement=EXCLUDED.replacement, enabled=EXCLUDED.enabled`,
+        [env.id, name, r.pattern || null, r.replacement || '[MASKED]', r.enabled !== false]);
+    }
+  }
+  if (payload.rca) {
+    await query(`INSERT INTO rca_settings(environment_id, provider, model, enabled) VALUES($1,$2,$3,$4)
+      ON CONFLICT(environment_id) DO UPDATE SET provider=EXCLUDED.provider, model=EXCLUDED.model, enabled=EXCLUDED.enabled, updated_at=now()`,
+      [env.id, payload.rca.provider || 'local', payload.rca.model || null, payload.rca.enabled !== false]);
+  }
+  return getEnvironmentConfig(workspaceSlug, environmentName);
+}
+
+export async function createEnvironment(workspaceSlug, payload = {}) {
+  const name = String(payload.name || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '-').slice(0, 40);
+  if (!name) throw new Error('Environment name is required');
+  const env = await ensureWorkspaceEnvironment(workspaceSlug, name);
+  if (payload.display_name && hasDatabase) await query(`UPDATE environments SET display_name=$1 WHERE id=$2`, [String(payload.display_name).slice(0,80), env.id]);
+  return getEnvironment(workspaceSlug, name);
 }

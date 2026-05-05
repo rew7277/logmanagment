@@ -21,15 +21,15 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
 import { parseUploadText, isNewLogStart, parseLogBlock, createStreamingParser } from '../services/logParser.js';
 
 const router = express.Router();
-router.use(rateLimit({ maxRequests: 180, windowMs: 60_000 }));
-const ingestLimit = rateLimit({ maxRequests: 30, windowMs: 60_000 });
+router.use(rateLimit({ maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), windowMs: 60_000 }));
+const ingestLimit = rateLimit({ maxRequests: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), windowMs: 60_000 });
 
 const MAX_UPLOAD_BYTES  = Number(process.env.MAX_UPLOAD_BYTES  || 750 * 1024 * 1024);
 const BASE_BATCH_SIZE   = Number(process.env.INGEST_BATCH_SIZE || 5000);
@@ -229,6 +229,19 @@ const normalizeWorkspace    = req => String(req.params.workspace   || req.query.
 // ─── Routes ──────────────────────────────────────────────────────────────────
 router.get('/workspaces', asyncHandler(async (_req, res) =>
   res.json({ data: await getWorkspaces() })
+));
+
+
+router.post('/:workspace/environments', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await createEnvironment(normalizeWorkspace(req), req.body || {}) })
+));
+
+router.get('/:workspace/:environment/config', asyncHandler(async (req, res) =>
+  res.json({ data: await getEnvironmentConfig(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.put('/:workspace/:environment/config', asyncHandler(async (req, res) =>
+  res.json({ data: await updateEnvironmentConfig(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
 ));
 
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {

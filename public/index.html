@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260505-v27" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-v28" />
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -99,7 +99,10 @@
           <div class="card ops-card wide"><div class="section-head"><div><h3>Deployments</h3><span>Before vs after impact for releases/uploads</span></div></div><div id="deploymentList"></div></div>
           <div class="card ops-card"><div class="section-head"><h3>Ingestion Jobs</h3><span>S3 / API / Upload health</span></div><div id="ingestionList"></div></div>
           <div class="card ops-card"><div class="section-head"><h3>Security &amp; Masking</h3><span>PII, token and payload hygiene</span></div><div id="securityList"></div></div>
-          <div class="card ops-card"><div class="section-head"><h3>Environment Policies</h3><span>Operational guardrails</span></div><div id="policyList"></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Environment Policies</h3><span>Operational guardrails</span></div><div id="policyList"></div><div class="config-form compact-config"><input id="retentionDays" type="number" min="1" max="3650" placeholder="Retention days"/><input id="rateLimitPerMin" type="number" min="10" placeholder="UI/API rate limit / min"/><input id="ingestRateLimitPerMin" type="number" min="1" placeholder="Ingest rate limit / min"/><label class="inline-check"><input id="archiveToS3" type="checkbox"/> Archive to S3</label><button id="savePolicyBtn" class="secondary" type="button">Save policy</button></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Custom Environments</h3><span>Add business-specific envs</span></div><div id="environmentList"></div><div class="config-form compact-config"><input id="newEnvironmentName" placeholder="Example: PREPROD / SIT / PERF"/><button id="createEnvironmentBtn" class="secondary" type="button">Add environment</button></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Custom PII Masking</h3><span>Business fields + regex rules</span></div><div id="maskingRuleList"></div><div class="config-form compact-config"><input id="maskFieldName" placeholder="Field e.g. customerMobile"/><input id="maskPattern" placeholder="Regex pattern optional"/><input id="maskReplacement" placeholder="Replacement e.g. [MASKED]"/><button id="saveMaskRuleBtn" class="secondary" type="button">Add / update rule</button></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>AI RCA Provider</h3><span>Local / OpenAI / Anthropic / Gemini</span></div><div id="aiProviderInfo"></div><div class="config-form compact-config"><select id="aiProvider"><option value="local">Local rule engine</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select><input id="aiModel" placeholder="Model e.g. gpt-4o-mini"/><label class="inline-check"><input id="aiEnabled" type="checkbox"/> Enable AI calls</label><button id="saveAiProviderBtn" class="secondary" type="button">Save RCA provider</button></div></div>
           <div class="card ops-card"><div class="section-head"><h3>Ask AI RCA</h3><span>Useful investigation starters</span></div><div id="rcaPromptList"></div></div>
         </div>
       </section>
@@ -113,6 +116,6 @@ Content-Type: text/plain
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v26"></script>
+  <script src="/app.js?v=20260505-v28"></script>
 </body>
 </html>
