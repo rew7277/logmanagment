@@ -1407,10 +1407,17 @@ export async function deleteEnvironment(workspaceSlug, environmentName) {
   if (['PROD'].includes(name)) throw new Error('PROD cannot be deleted. Rename or clear data instead.');
   if (!hasDatabase) {
     const before = fallback.environments.length;
-    fallback.environments = fallback.environments.filter(e => e.name !== name);
+    fallback.environments = fallback.environments.filter(e => String(e.name).toUpperCase() !== name);
     return { deleted: before - fallback.environments.length, environment: name };
   }
-  const env = await getEnvironment(workspaceSlug, name);
+  let env;
+  try { env = await getEnvironment(workspaceSlug, name); }
+  catch { return { deleted: 0, environment: name, already_removed: true }; }
+  // Explicit cleanup keeps deletion reliable even if an older DB was migrated before all FK cascades existed.
+  const tables = ['audit_logs','masking_rules','environment_configs','rca_provider_configs','alert_rules','saved_searches','security_events','ingestion_jobs','deployments','alerts','traces','endpoints','services','log_events'];
+  for (const table of tables) {
+    try { await query(`DELETE FROM ${table} WHERE environment_id=$1`, [env.id]); } catch (_) {}
+  }
   const result = await query(`DELETE FROM environments WHERE id=$1 RETURNING id`, [env.id]);
   return { deleted: result.rowCount || 0, environment: name };
 }

@@ -138,3 +138,10 @@ After deploy, run:
 ```bash
 npm run db:migrate
 ```
+
+
+## V31 changes
+- Environment delete now performs explicit scoped cleanup before removing the environment, so custom environments disappear immediately from the UI and database.
+- AI RCA Provider card layout was rebuilt to avoid cramped controls.
+- API Docs now includes direct API ingest (`POST /logs`), async file upload, sync upload, search, error groups, and RCA test requests.
+- For secured API ingest set `INGEST_AUTH_MODE=strict` and `INGEST_API_KEY`, then send either `Authorization: Bearer <key>` or `x-api-key: <key>`.

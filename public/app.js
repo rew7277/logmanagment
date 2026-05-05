@@ -58,7 +58,7 @@ function setPage(page){
   if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
   if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
   if(state.page==='ops') { loadAlertsOps(); }
-  if(state.page==='apiDocs') { renderApiDoc('upload'); }
+  if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -596,11 +596,21 @@ async function renameEnvironment(oldName){
   toast('Environment updated','success'); await loadEnvironmentList(); await refreshAll();
 }
 async function removeEnvironment(name){
+  name=String(name||'').toUpperCase();
   if(name==='PROD') return toast('PROD cannot be deleted','error');
   if(!confirm(`Delete environment ${name}? This removes its scoped logs, rules, alerts and policies.`)) return;
-  await api(`/api/${state.workspace}/environments/${encodeURIComponent(name)}`,{method:'DELETE'});
-  if(state.environment===name){state.environment='PROD';localStorage.setItem('observex-env','PROD');}
-  toast('Environment deleted','success'); await loadEnvironmentList(); await refreshAll();
+  try{
+    const res = await api(`/api/${state.workspace}/environments/${encodeURIComponent(name)}`,{method:'DELETE'});
+    // Optimistic UI removal so stale cached rows do not remain visible.
+    state.environments = (state.environments||[]).filter(e=>String(e).toUpperCase()!==name);
+    const row = document.querySelector(`[data-env-row="${CSS.escape(name)}"]`); if(row) row.remove();
+    if(state.environment===name){state.environment='PROD';localStorage.setItem('observex-env','PROD');}
+    await loadEnvironmentList();
+    state.environments = (state.environments||[]).filter(e=>String(e).toUpperCase()!==name);
+    renderEnvButtons();
+    toast((res?.deleted===0?'Environment was already removed':'Environment deleted'),'success');
+    if(state.environment==='PROD') await refreshAll();
+  }catch(e){ toast(e.message || 'Delete failed','error'); }
 }
 function getExtraEnvs(){try{return JSON.parse(localStorage.getItem('observex-extra-envs')||'[]')}catch{return []}}
 
@@ -703,14 +713,35 @@ async function uploadBody(body,name='pasted logs'){
     await Promise.allSettled([loadUploadHistory(), loadOverview()]);}
 }
 
-function renderEnvButtons(){const host=$('envButtons'); if(!host) return; const envs=[...new Set((state.environments&&state.environments.length?state.environments:['PROD','UAT','DEV','DR']).concat(getExtraEnvs()))]; host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected':'Available environment scope'}</p></div><div class="row-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join(''); $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env)); $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env)); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
+function renderEnvButtons(){
+  const host=$('envButtons'); if(!host) return;
+  const source = state.environments && state.environments.length ? state.environments : ['PROD','UAT','DEV','DR'];
+  const envs=[...new Set(source.map(e=>String(e||'').toUpperCase()).filter(Boolean))];
+  host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${esc(env)}">${esc(env)}</button>`).join('');
+  if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable env-policy-card" data-env-row="${esc(env)}"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected environment':'Available environment scope'}</p></div><div class="row-actions env-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join('');
+  $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env));
+  $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env));
+  $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});
+}
 
 const apiDocTemplates = {
+  apiIngest: {
+    title: 'POST API Ingest', method: 'POST', path: '/logs',
+    description: 'Ingest structured log events directly from another system or application. Use Authorization: Bearer <INGEST_API_KEY> or x-api-key when INGEST_AUTH_MODE=strict.',
+    headers: {'Content-Type':'application/json','Authorization':'Bearer <INGEST_API_KEY>'},
+    body: JSON.stringify([{timestamp:new Date().toISOString(),severity:'ERROR',service:'s-paymentengine-api',method:'GET',path:'/paymentEngine/loanDetails',trace_id:'TR-DEMO-1001',correlation_id:'CORR-DEMO-1001',message:'HTTP:NOT_FOUND while calling payment engine loan details',latency_ms:842,error_type:'HTTP:NOT_FOUND'}], null, 2)
+  },
+  asyncUpload: {
+    title: 'POST Async File Upload', method: 'POST', path: '/logs/upload-async',
+    description: 'Upload large raw MuleSoft log files. This queues ingestion and returns a job id that can be polled from the ingestion endpoint.',
+    headers: {'Content-Type':'text/plain','X-File-Name':'sample-mulesoft.log'},
+    body: '2026-05-05 10:48:02 ERROR s-paymentengine-api [correlationId=CORR-1001] GET /paymentEngine/loanDetails HTTP:NOT_FOUND'
+  },
   upload: {
-    title: 'POST Logs Upload', method: 'POST', path: '/logs/upload',
-    description: 'Upload raw MuleSoft logs, JSONL, or plain text into the selected workspace/environment.',
-    headers: {'Content-Type':'text/plain'},
-    body: '{"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","method":"POST","path":"/payment/status","trace_id":"TR-1001","message":"Timeout"}'
+    title: 'POST Sync Logs Upload', method: 'POST', path: '/logs/upload',
+    description: 'Upload raw MuleSoft logs, JSONL, or plain text synchronously into the selected workspace/environment. Use async upload for larger files.',
+    headers: {'Content-Type':'text/plain','X-File-Name':'sample.log'},
+    body: '2026-05-05 10:48:02 ERROR s-paymentengine-api GET /paymentEngine/loanDetails HTTP:NOT_FOUND trace_id=TR-1001'
   },
   search: {
     title: 'GET Search Logs', method: 'GET', path: '/logs?q=timeout&severity=ERROR&limit=10',
