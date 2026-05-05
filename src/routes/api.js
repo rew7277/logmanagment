@@ -21,7 +21,7 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -226,6 +226,21 @@ const asyncHandler          = fn => (req, res, next) => Promise.resolve(fn(req, 
 const normalizeEnvironment  = req => String(req.params.environment || req.query.environment || 'PROD').toUpperCase();
 const normalizeWorkspace    = req => String(req.params.workspace   || req.query.workspace   || 'fsbl-prod-ops');
 
+async function requireWorkspaceIngestKey(req, res, next) {
+  const mode = String(process.env.INGEST_AUTH_MODE || 'optional').toLowerCase();
+  const legacy = process.env.INGEST_API_KEY;
+  const authHeader = req.headers['authorization'] || '';
+  const apiKeyHeader = req.headers['x-api-key'] || '';
+  const provided = authHeader.replace(/^Bearer\s+/i, '') || apiKeyHeader;
+  if (legacy && provided === legacy) return next();
+  if (mode !== 'strict' && !provided) return next();
+  const ok = await verifyIngestApiKey(normalizeWorkspace(req), normalizeEnvironment(req), provided, 'API');
+  if (!ok.ok) return res.status(401).json({ error: `Invalid ingestion key: ${ok.reason}. Generate an environment-scoped key from Ops → API Keys.` });
+  req.ingestKey = ok.key;
+  return next();
+}
+
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 router.get('/workspaces', asyncHandler(async (_req, res) =>
   res.json({ data: await getWorkspaces() })
@@ -271,6 +286,31 @@ router.put('/:workspace/:environment/masking-rules/:ruleId', asyncHandler(async 
 router.delete('/:workspace/:environment/masking-rules/:ruleId', asyncHandler(async (req, res) =>
   res.json({ data: await deleteMaskingRule(normalizeWorkspace(req), normalizeEnvironment(req), req.params.ruleId) })
 ));
+
+router.post('/:workspace/:environment/masking-rules/test', asyncHandler(async (req, res) =>
+  res.json({ data: await testMaskingRules(normalizeWorkspace(req), normalizeEnvironment(req), req.body?.sample || req.body?.text || '') })
+));
+
+router.get('/:workspace/:environment/ingest-keys', asyncHandler(async (req, res) =>
+  res.json({ data: await listIngestApiKeys(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.post('/:workspace/:environment/ingest-keys', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await createIngestApiKey(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+
+router.post('/:workspace/:environment/ingest-keys/:keyId/revoke', asyncHandler(async (req, res) =>
+  res.json({ data: await revokeIngestApiKey(normalizeWorkspace(req), normalizeEnvironment(req), req.params.keyId) })
+));
+
+router.delete('/:workspace/:environment/ingest-keys/:keyId', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteIngestApiKey(normalizeWorkspace(req), normalizeEnvironment(req), req.params.keyId) })
+));
+
+router.get('/:workspace/:environment/audit-logs', asyncHandler(async (req, res) =>
+  res.json({ data: await getAuditLogs(normalizeWorkspace(req), normalizeEnvironment(req), req.query.limit || 50) })
+));
+
 
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {
   const data = await getOverview(normalizeWorkspace(req), normalizeEnvironment(req));
@@ -360,7 +400,7 @@ router.post('/:workspace/:environment/rca', asyncHandler(async (req, res) =>
 ));
 
 // Direct JSON log ingest
-router.post('/:workspace/:environment/logs', ingestLimit, requireApiKey, asyncHandler(async (req, res) => {
+router.post('/:workspace/:environment/logs', ingestLimit, requireWorkspaceIngestKey, asyncHandler(async (req, res) => {
   const payload = Array.isArray(req.body) ? req.body : [req.body];
   const data    = await bulkCreateLogs(normalizeWorkspace(req), normalizeEnvironment(req), payload);
   res.status(201).json({ inserted: data.length, data });

@@ -145,3 +145,49 @@ npm run db:migrate
 - AI RCA Provider card layout was rebuilt to avoid cramped controls.
 - API Docs now includes direct API ingest (`POST /logs`), async file upload, sync upload, search, error groups, and RCA test requests.
 - For secured API ingest set `INGEST_AUTH_MODE=strict` and `INGEST_API_KEY`, then send either `Authorization: Bearer <key>` or `x-api-key: <key>`.
+
+## V32 Updates
+
+### Environment-scoped Ingestion API Keys
+Generate ingestion keys from **Ops → Ingestion API Keys**. Keys are scoped to the current workspace and environment, for example FSBL/PROD and FSBL/UAT get different keys. The full key is shown only once.
+
+Use it with API ingest:
+
+```http
+POST /api/{workspace}/{environment}/logs
+Authorization: Bearer ox_live_workspace_prod_xxx
+Content-Type: application/json
+```
+
+Set `INGEST_AUTH_MODE=strict` in Railway to require keys. Legacy `INGEST_API_KEY` is still supported as a fallback, but DB-backed environment keys are recommended.
+
+### AI RCA Provider
+Configure provider in **Ops → AI RCA Provider**. API keys are not stored in the browser. Add one of these Railway variables:
+
+```env
+AI_PROVIDER=openai
+AI_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+```
+
+Supported providers: local, OpenAI, Anthropic, Gemini.
+
+### Audit and Masking Tester
+Ops now includes audit history and a masking-rule tester so users can validate regex rules before saving.
+
+
+## V33 API Docs update
+
+The API Documentation page now displays the full protocol + host in the request URL, for example:
+
+```text
+https://your-railway-app.up.railway.app/api/<workspace>/<environment>/logs
+```
+
+API ingest keys are generated from **Ops → Ingestion API Keys** and are scoped per workspace + environment. Use them as:
+
+```http
+Authorization: Bearer <INGEST_API_KEY>
+```
+
+Recommended pattern: create separate keys for PROD, UAT, SIT, PERF, and revoke/rotate them independently.

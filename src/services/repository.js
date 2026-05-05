@@ -1,8 +1,11 @@
+import crypto from 'crypto';
 import { query, hasDatabase, withTransaction } from '../db/pool.js';
 import { sanitizeParsedRecords } from './logParser.js';
 
 const fallback = {
   workspaces: [{ id: 'demo-workspace', name: 'FSBL Production Ops', slug: 'fsbl-prod-ops' }],
+  ingestKeys: new Map(),
+  auditLogs: new Map(),
   environments: [
     { id: 'env-prod', name: 'PROD', display_name: 'PROD', health_score: 0, status: 'observed' },
     { id: 'env-uat',  name: 'UAT',  display_name: 'UAT',  health_score: 0, status: 'observed' },
@@ -1384,7 +1387,9 @@ export async function createEnvironment(workspaceSlug, payload = {}) {
   }
   const env = await ensureWorkspaceEnvironment(workspaceSlug, name);
   await query(`UPDATE environments SET display_name=$1, status=$2 WHERE id=$3`, [String(payload.display_name || name).slice(0,80), String(payload.status || env.status || 'observed').slice(0,40), env.id]);
-  return getEnvironment(workspaceSlug, name);
+  const created = await getEnvironment(workspaceSlug, name);
+  await audit(created.id, 'create', 'environment', name, null, created).catch(()=>{});
+  return created;
 }
 
 export async function updateEnvironment(workspaceSlug, environmentName, payload = {}) {
@@ -1399,6 +1404,7 @@ export async function updateEnvironment(workspaceSlug, environmentName, payload 
   }
   const env = await getEnvironment(workspaceSlug, name);
   await query(`UPDATE environments SET name=$1, display_name=$2, status=$3 WHERE id=$4 RETURNING *`, [nextName, String(payload.display_name || nextName).slice(0,80), String(payload.status || env.status || 'observed').slice(0,40), env.id]);
+  await audit(env.id, 'rename', 'environment', name, env, { name: nextName }).catch(()=>{});
   return getEnvironment(workspaceSlug, nextName);
 }
 
@@ -1414,11 +1420,12 @@ export async function deleteEnvironment(workspaceSlug, environmentName) {
   try { env = await getEnvironment(workspaceSlug, name); }
   catch { return { deleted: 0, environment: name, already_removed: true }; }
   // Explicit cleanup keeps deletion reliable even if an older DB was migrated before all FK cascades existed.
-  const tables = ['audit_logs','masking_rules','environment_configs','rca_provider_configs','alert_rules','saved_searches','security_events','ingestion_jobs','deployments','alerts','traces','endpoints','services','log_events'];
+  const tables = ['audit_logs','masking_rules','environment_policies','rca_settings','alert_rules','saved_searches','security_events','ingestion_jobs','deployments','alerts','traces','endpoints','services','log_events'];
   for (const table of tables) {
     try { await query(`DELETE FROM ${table} WHERE environment_id=$1`, [env.id]); } catch (_) {}
   }
   const result = await query(`DELETE FROM environments WHERE id=$1 RETURNING id`, [env.id]);
+  await audit(env.id, 'delete', 'environment', name, env, null).catch(()=>{});
   return { deleted: result.rowCount || 0, environment: name };
 }
 
@@ -1440,6 +1447,7 @@ export async function upsertMaskingRule(workspaceSlug, environmentName, payload 
     ON CONFLICT(environment_id, field_name) DO UPDATE SET pattern=EXCLUDED.pattern, replacement=EXCLUDED.replacement, enabled=EXCLUDED.enabled
     RETURNING id, field_name, pattern, replacement, enabled`,
     [env.id, field, payload.pattern || null, payload.replacement || '[MASKED]', payload.enabled !== false]);
+  await audit(env.id, 'upsert', 'masking_rule', field, null, result.rows[0]).catch(()=>{});
   return result.rows[0];
 }
 
@@ -1455,7 +1463,7 @@ export async function deleteMaskingRule(workspaceSlug, environmentName, ruleIdOr
     return { deleted: list.length - next.length };
   }
   const result = await query(`DELETE FROM masking_rules WHERE environment_id=$1 AND (id::text=$2 OR field_name=$2) RETURNING id`, [env.id, keyVal]);
-  if (result.rowCount) return { deleted: result.rowCount || 0 };
+  if (result.rowCount) { await audit(env.id, 'delete', 'masking_rule', keyVal, null, null).catch(()=>{}); return { deleted: result.rowCount || 0 }; }
   const builtin = ['password','authorization','token'].includes(keyVal.toLowerCase());
   if (builtin) {
     await query(`INSERT INTO masking_rules(environment_id, field_name, pattern, replacement, enabled)
@@ -1464,6 +1472,121 @@ export async function deleteMaskingRule(workspaceSlug, environmentName, ruleIdOr
     return { deleted: 1, disabled_builtin: true };
   }
   return { deleted: 0 };
+}
+
+
+function maskKey(key='') { return String(key).slice(0, 14) + '••••' + String(key).slice(-4); }
+function hashKey(key='') { return crypto.createHash('sha256').update(String(key)).digest('hex'); }
+function keyPrefix(key='') { return String(key).split('_').slice(0,4).join('_') || String(key).slice(0,16); }
+function randomToken(size=24) { return crypto.randomBytes(size).toString('base64url'); }
+async function audit(environmentId, action, entityType, entityId, beforeValue=null, afterValue=null) {
+  if (!hasDatabase || !environmentId) return;
+  try { await query(`INSERT INTO audit_logs(environment_id, actor, action, entity_type, entity_id, before_value, after_value)
+    VALUES($1,$2,$3,$4,$5,$6,$7)`, [environmentId, 'system', action, entityType, entityId, beforeValue, afterValue]); } catch (_) {}
+}
+
+export async function listIngestApiKeys(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}`;
+    return fallback.ingestKeys.get(key) || [];
+  }
+  const result = await query(`SELECT id, key_name, key_prefix, status, allowed_sources, expires_at, last_used_at, created_at
+    FROM ingest_api_keys WHERE environment_id=$1 ORDER BY created_at DESC`, [env.id]);
+  return result.rows.map(r => ({ ...r, masked_key: `${r.key_prefix}_••••••••` }));
+}
+
+export async function createIngestApiKey(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const name = String(payload.key_name || payload.name || 'Default ingestion key').trim().slice(0, 80);
+  const sources = Array.isArray(payload.allowed_sources) && payload.allowed_sources.length ? payload.allowed_sources : ['API'];
+  const envPart = String(environmentName || 'PROD').toLowerCase().replace(/[^a-z0-9]+/g,'-');
+  const wsPart = String(workspaceSlug || 'workspace').toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0, 16);
+  const mode = envPart === 'prod' ? 'live' : 'test';
+  const plainKey = `ox_${mode}_${wsPart}_${envPart}_${randomToken(24)}`;
+  const row = { id: `key-${Date.now()}`, key_name: name, key_prefix: keyPrefix(plainKey), status: 'active', allowed_sources: sources, created_at: new Date().toISOString(), masked_key: maskKey(plainKey), plain_key: plainKey };
+  if (!hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.ingestKeys.get(key) || [];
+    list.unshift(row); fallback.ingestKeys.set(key, list); return row;
+  }
+  const result = await query(`INSERT INTO ingest_api_keys(environment_id, key_name, key_prefix, key_hash, status, allowed_sources, expires_at)
+    VALUES($1,$2,$3,$4,'active',$5,$6) RETURNING id, key_name, key_prefix, status, allowed_sources, expires_at, last_used_at, created_at`,
+    [env.id, name, keyPrefix(plainKey), hashKey(plainKey), sources, payload.expires_at || null]);
+  await audit(env.id, 'create', 'ingest_api_key', result.rows[0].id, null, { key_name: name, key_prefix: keyPrefix(plainKey), allowed_sources: sources });
+  return { ...result.rows[0], masked_key: maskKey(plainKey), plain_key: plainKey };
+}
+
+export async function revokeIngestApiKey(workspaceSlug, environmentName, keyId) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) {
+    const k = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.ingestKeys.get(k) || [];
+    const hit = list.find(x => String(x.id) === String(keyId)); if (hit) hit.status = 'revoked';
+    fallback.ingestKeys.set(k, list); return { revoked: hit ? 1 : 0 };
+  }
+  const result = await query(`UPDATE ingest_api_keys SET status='revoked' WHERE environment_id=$1 AND id::text=$2 RETURNING id, key_name, key_prefix`, [env.id, String(keyId)]);
+  if (result.rows[0]) await audit(env.id, 'revoke', 'ingest_api_key', String(keyId), null, result.rows[0]);
+  return { revoked: result.rowCount || 0 };
+}
+
+export async function deleteIngestApiKey(workspaceSlug, environmentName, keyId) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) {
+    const k = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.ingestKeys.get(k) || [];
+    const next = list.filter(x => String(x.id) !== String(keyId)); fallback.ingestKeys.set(k, next);
+    return { deleted: list.length - next.length };
+  }
+  const result = await query(`DELETE FROM ingest_api_keys WHERE environment_id=$1 AND id::text=$2 RETURNING id, key_name, key_prefix`, [env.id, String(keyId)]);
+  if (result.rows[0]) await audit(env.id, 'delete', 'ingest_api_key', String(keyId), result.rows[0], null);
+  return { deleted: result.rowCount || 0 };
+}
+
+export async function verifyIngestApiKey(workspaceSlug, environmentName, providedKey, source='API') {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!providedKey) return { ok: false, reason: 'missing' };
+  if (!hasDatabase) {
+    const k = `${workspaceSlug}:${environmentName}`;
+    const hit = (fallback.ingestKeys.get(k) || []).find(x => providedKey.startsWith(x.key_prefix) && x.status === 'active');
+    return hit ? { ok: true, key: hit } : { ok: false, reason: 'invalid' };
+  }
+  const result = await query(`SELECT id, key_name, allowed_sources, status, expires_at FROM ingest_api_keys
+    WHERE environment_id=$1 AND key_hash=$2 AND status='active' AND (expires_at IS NULL OR expires_at > now())`, [env.id, hashKey(providedKey)]);
+  const hit = result.rows[0];
+  if (!hit) return { ok: false, reason: 'invalid_or_expired' };
+  const allowed = (hit.allowed_sources || ['API']).map(String).includes(String(source).toUpperCase());
+  if (!allowed) return { ok: false, reason: 'source_not_allowed' };
+  await query(`UPDATE ingest_api_keys SET last_used_at=now() WHERE id=$1`, [hit.id]).catch(()=>{});
+  return { ok: true, key: hit };
+}
+
+export async function getAuditLogs(workspaceSlug, environmentName, limit=50) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return [];
+  const result = await query(`SELECT action, entity_type, entity_id, actor, before_value, after_value, created_at
+    FROM audit_logs WHERE environment_id=$1 ORDER BY created_at DESC LIMIT $2`, [env.id, Math.max(1, Math.min(200, Number(limit)||50))]);
+  return result.rows;
+}
+
+export async function testMaskingRules(workspaceSlug, environmentName, sampleText='') {
+  const cfg = await getEnvironmentConfig(workspaceSlug, environmentName);
+  let masked = String(sampleText || '');
+  const hits = [];
+  for (const r of cfg.masking_rules || []) {
+    if (r.enabled === false) continue;
+    try {
+      if (r.pattern) {
+        const re = new RegExp(r.pattern, 'gi');
+        const before = masked;
+        masked = masked.replace(re, r.replacement || '[MASKED]');
+        if (before !== masked) hits.push(r.field_name);
+      } else if (r.field_name && masked.toLowerCase().includes(String(r.field_name).toLowerCase())) {
+        hits.push(r.field_name);
+      }
+    } catch (_) {}
+  }
+  return { original: sampleText, masked, hits: [...new Set(hits)] };
 }
 
 export async function resetEnvironmentPolicy(workspaceSlug, environmentName) {

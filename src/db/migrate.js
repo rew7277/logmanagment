@@ -218,6 +218,23 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audit_env_time ON audit_logs(environment_id, created_at DESC)`
+,
+  `CREATE TABLE IF NOT EXISTS ingest_api_keys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    key_name TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+    allowed_sources TEXT[] NOT NULL DEFAULT ARRAY['API'],
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, key_name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ingest_api_keys_env ON ingest_api_keys(environment_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_ingest_api_keys_prefix ON ingest_api_keys(key_prefix)`
+
 ];
 
 export async function migrate() {
