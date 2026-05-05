@@ -2,6 +2,7 @@ import compression from 'compression';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
+import { WebSocketServer } from 'ws';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'url';
 import apiRoutes from './routes/api.js';
 import { hasDatabase, query, closePool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
+import { getLogs } from './services/repository.js';
 import { seed } from './db/seed.js';
 
 dotenv.config();
@@ -159,4 +161,31 @@ process.on('uncaughtException', (err) => {
 server = app.listen(port, '0.0.0.0', () => {
   console.log(`[server] ObserveX running on 0.0.0.0:${port} (NODE_ENV=${process.env.NODE_ENV})`);
   runDatabaseStartupTasks();
+});
+
+// WebSocket live logs: ws(s)://host/ws/live-logs?workspace=fsbl-prod-ops&environment=PROD
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  if (url.pathname !== '/ws/live-logs') return socket.destroy();
+  wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request, url));
+});
+wss.on('connection', (ws, _request, url) => {
+  const workspace = url.searchParams.get('workspace') || 'fsbl-prod-ops';
+  const environment = url.searchParams.get('environment') || 'PROD';
+  let lastSeen = null;
+  ws.send(JSON.stringify({ type:'connected', workspace, environment, message:'Live logs connected' }));
+  const timer = setInterval(async () => {
+    if (ws.readyState !== ws.OPEN) return;
+    try {
+      const page = await getLogs(workspace, environment, { page:1, limit:20, range:'all' });
+      const items = page.items || [];
+      const fresh = lastSeen ? items.filter(x => new Date(x.created_at || x.timestamp) > new Date(lastSeen)) : items.slice(0,5);
+      if (items[0]) lastSeen = items[0].created_at || items[0].timestamp;
+      if (fresh.length) ws.send(JSON.stringify({ type:'logs', items:fresh }));
+    } catch (error) {
+      ws.send(JSON.stringify({ type:'error', error:error.message }));
+    }
+  }, 5000);
+  ws.on('close', () => clearInterval(timer));
 });

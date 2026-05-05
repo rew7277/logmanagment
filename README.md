@@ -235,3 +235,22 @@ After deployment run:
 ```bash
 npm run db:migrate
 ```
+
+## V36 updates
+
+- Centralized light/dark theme color system for Ops, Alerts, RCA, API registry and topology cards.
+- Improved API/endpoint table spacing: endpoint path uses available width, endpoint delete has its own column, API delete is placed next to health/manage.
+- Added Approval Workflow APIs and Ops UI.
+- Added Alert Notification Channels for Slack/Webhook/Email targets.
+- Added API Key Usage Analytics for request count, error count, last used and last error.
+- Added WebSocket Live Logs: `wss://<host>/ws/live-logs?workspace=<workspace>&environment=<environment>`.
+- Added environment scoped RBAC management UI.
+- Added inferred topology view from services/endpoints.
+
+Run:
+
+```bash
+npm install
+npm run db:migrate
+npm start
+```

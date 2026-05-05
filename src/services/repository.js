@@ -1694,3 +1694,127 @@ export async function deleteApiRegistryItem(workspaceSlug, environmentName, payl
   await audit(env.id, 'delete', 'api_registry', id || `${service} ${method} ${path}`, null, payload).catch(()=>{});
   return { deleted, tombstone: true };
 }
+
+
+// ─── V36 Enterprise control-plane helpers ───────────────────────────────────
+export async function listNotificationChannels(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return fallback.notificationChannels?.get(`${workspaceSlug}:${environmentName}`) || [];
+  const r = await query(`SELECT id, name, channel_type, target, enabled, created_at FROM notification_channels WHERE environment_id=$1 ORDER BY created_at DESC`, [env.id]);
+  return r.rows;
+}
+
+export async function upsertNotificationChannel(workspaceSlug, environmentName, payload={}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const name = String(payload.name || '').trim();
+  const channelType = String(payload.channel_type || payload.type || 'WEBHOOK').toUpperCase();
+  const target = String(payload.target || '').trim();
+  const enabled = payload.enabled !== false;
+  if (!name || !target) throw new Error('Channel name and target are required');
+  if (!hasDatabase) {
+    fallback.notificationChannels = fallback.notificationChannels || new Map();
+    const key = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.notificationChannels.get(key) || [];
+    const row = { id: payload.id || `channel-${Date.now()}`, name, channel_type: channelType, target, enabled, created_at: new Date().toISOString() };
+    const next = [row, ...list.filter(x => String(x.id)!==String(row.id) && x.name!==name)];
+    fallback.notificationChannels.set(key, next); return row;
+  }
+  const r = await query(`INSERT INTO notification_channels(environment_id, name, channel_type, target, enabled)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(environment_id, name) DO UPDATE SET channel_type=EXCLUDED.channel_type, target=EXCLUDED.target, enabled=EXCLUDED.enabled
+    RETURNING *`, [env.id, name, channelType, target, enabled]);
+  await audit(env.id, 'upsert', 'notification_channel', r.rows[0].id, null, r.rows[0]).catch(()=>{});
+  return r.rows[0];
+}
+
+export async function deleteNotificationChannel(workspaceSlug, environmentName, id) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return { deleted: 1 };
+  const r = await query(`DELETE FROM notification_channels WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id)]);
+  await audit(env.id, 'delete', 'notification_channel', String(id), r.rows[0] || null, null).catch(()=>{});
+  return { deleted: r.rowCount || 0 };
+}
+
+export async function listApprovalRequests(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return fallback.approvals?.get(`${workspaceSlug}:${environmentName}`) || [];
+  const r = await query(`SELECT * FROM approval_requests WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 50`, [env.id]);
+  return r.rows;
+}
+
+export async function createApprovalRequest(workspaceSlug, environmentName, payload={}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const requestType = String(payload.request_type || 'policy_change');
+  const title = String(payload.title || 'Approval request').trim();
+  if (!hasDatabase) {
+    fallback.approvals = fallback.approvals || new Map();
+    const key = `${workspaceSlug}:${environmentName}`;
+    const row = { id:`approval-${Date.now()}`, request_type:requestType, title, payload, status:'pending', created_at:new Date().toISOString() };
+    fallback.approvals.set(key, [row, ...(fallback.approvals.get(key)||[])]); return row;
+  }
+  const r = await query(`INSERT INTO approval_requests(environment_id, request_type, title, payload, requested_by)
+    VALUES($1,$2,$3,$4,$5) RETURNING *`, [env.id, requestType, title, payload, payload.requested_by || 'system']);
+  await audit(env.id, 'create', 'approval_request', r.rows[0].id, null, r.rows[0]).catch(()=>{});
+  return r.rows[0];
+}
+
+export async function reviewApprovalRequest(workspaceSlug, environmentName, id, status='approved') {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const nextStatus = String(status).toLowerCase() === 'rejected' ? 'rejected' : 'approved';
+  if (!hasDatabase) return { id, status: nextStatus };
+  const r = await query(`UPDATE approval_requests SET status=$3, reviewed_by='system', reviewed_at=now() WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id), nextStatus]);
+  await audit(env.id, nextStatus, 'approval_request', String(id), null, r.rows[0] || null).catch(()=>{});
+  return r.rows[0] || { id, status: nextStatus };
+}
+
+export async function listUserRoles(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return fallback.userRoles?.get(`${workspaceSlug}:${environmentName}`) || [{ user_email:'admin@company.com', role:'admin' }];
+  const r = await query(`SELECT id, user_email, role, created_at FROM user_roles WHERE environment_id=$1 ORDER BY role, user_email`, [env.id]);
+  return r.rows;
+}
+
+export async function upsertUserRole(workspaceSlug, environmentName, payload={}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const email = String(payload.user_email || payload.email || '').trim().toLowerCase();
+  const role = String(payload.role || 'viewer').toLowerCase();
+  if (!email) throw new Error('User email is required');
+  if (!hasDatabase) return { id:`role-${Date.now()}`, user_email:email, role };
+  const r = await query(`INSERT INTO user_roles(environment_id, user_email, role) VALUES($1,$2,$3)
+    ON CONFLICT(environment_id, user_email) DO UPDATE SET role=EXCLUDED.role RETURNING *`, [env.id, email, role]);
+  await audit(env.id, 'upsert', 'user_role', email, null, r.rows[0]).catch(()=>{});
+  return r.rows[0];
+}
+
+export async function deleteUserRole(workspaceSlug, environmentName, id) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return { deleted: 1 };
+  const r = await query(`DELETE FROM user_roles WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id)]);
+  await audit(env.id, 'delete', 'user_role', String(id), r.rows[0] || null, null).catch(()=>{});
+  return { deleted: r.rowCount || 0 };
+}
+
+export async function getIngestKeyUsage(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!hasDatabase) return [];
+  const r = await query(`SELECT id, key_name, key_prefix, status, allowed_sources, request_count, error_count, last_error, last_used_at, created_at
+    FROM ingest_api_keys WHERE environment_id=$1 ORDER BY COALESCE(last_used_at, created_at) DESC`, [env.id]);
+  return r.rows;
+}
+
+export async function getTopology(workspaceSlug, environmentName) {
+  const services = await getServices(workspaceSlug, environmentName).catch(()=>[]);
+  const endpoints = await getEndpoints(workspaceSlug, environmentName).catch(()=>[]);
+  const nodes = [{ id:'ingestion', label:'Ingestion', type:'source' }];
+  const edges = [];
+  for (const s of services.slice(0,30)) {
+    nodes.push({ id:`svc:${s.name}`, label:s.name, type:'service', error_rate:Number(s.error_rate||0), health_score:Number(s.health_score||0) });
+    edges.push({ from:'ingestion', to:`svc:${s.name}`, label:'logs' });
+  }
+  for (const ep of endpoints.slice(0,80)) {
+    const eid = `ep:${ep.service_name}:${ep.method}:${ep.path}`;
+    nodes.push({ id:eid, label:`${ep.method||''} ${ep.path||''}`.trim(), type:'endpoint', service_name:ep.service_name, error_rate:Number(ep.error_rate||0) });
+    edges.push({ from:`svc:${ep.service_name}`, to:eid, label:`${ep.calls_total ?? ep.calls_per_hour ?? 0} calls` });
+  }
+  return { nodes, edges, note:'Topology is inferred from service_name, endpoint path, trace/correlation IDs and log sequencing. For perfect dependency maps, ingest outbound dependency events too.' };
+}

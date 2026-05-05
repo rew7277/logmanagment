@@ -249,6 +249,44 @@ const statements = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`,
   `CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`
+,
+  `CREATE TABLE IF NOT EXISTS notification_channels (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    channel_type TEXT NOT NULL CHECK (channel_type IN ('WEBHOOK','SLACK','EMAIL')) DEFAULT 'WEBHOOK',
+    target TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_notification_channels_env ON notification_channels(environment_id, enabled)`,
+  `CREATE TABLE IF NOT EXISTS approval_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    request_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected')) DEFAULT 'pending',
+    requested_by TEXT DEFAULT 'system',
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_approval_requests_env_status ON approval_requests(environment_id, status, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS user_roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    user_email TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin','developer','tester','manager','viewer')) DEFAULT 'viewer',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, user_email)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_roles_env ON user_roles(environment_id, role)`,
+  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS request_count BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS error_count BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS last_error TEXT`
+
 
 
 ];

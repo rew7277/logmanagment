@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260505-v28" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-v36" />
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -105,7 +105,14 @@
           <div class="card ops-card ai-provider-card"><div class="section-head"><h3>AI RCA Provider</h3><span>Local / OpenAI / Anthropic / Gemini</span></div><div class="ai-rca-grid"><div id="aiProviderInfo" class="ai-current-card"></div><div class="ai-config-card"><div class="form-grid two"><label>Provider<select id="aiProvider"><option value="local">Local rule engine</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select></label><label>Model<input id="aiModel" placeholder="gpt-4o-mini"/></label></div><label class="clean-check"><input id="aiEnabled" type="checkbox"/><span>Enable external AI calls</span></label><button id="saveAiProviderBtn" class="secondary full" type="button">Save RCA provider</button></div></div><div class="helper-note">API keys are never stored in the browser. Configure OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in Railway environment variables. Use Local mode when external AI is disabled.</div></div>
           
           <div class="card ops-card"><div class="section-head"><h3>Ingestion API Keys</h3><span>Workspace + environment scoped</span></div><div class="helper-note">Generate unique keys per organization/environment. The full key is shown only once; store it safely.</div><div id="ingestKeyList"></div><div class="config-form compact-config"><input id="newIngestKeyName" placeholder="Key name e.g. MuleSoft PROD"/><button id="createIngestKeyBtn" class="secondary" type="button">Generate key</button></div><pre id="newIngestKeyOutput" class="secret-output">Generated key will appear here once.</pre></div>
-          <div class="card ops-card"><div class="section-head"><h3>Audit History</h3><span>Policy and key changes</span></div><div id="auditLogList"></div></div>          <div class="card ops-card"><div class="section-head"><h3>Ask AI RCA</h3><span>Useful investigation starters</span></div><div id="rcaPromptList"></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Audit History</h3><span>Policy and key changes</span></div><div id="auditLogList"></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Alert Notification Channels</h3><span>Slack / Webhook / Email targets</span></div><div id="notificationChannelList"></div><div class="config-form compact-config"><input id="channelName" placeholder="Name e.g. NOC Slack"/><select id="channelType"><option>WEBHOOK</option><option>SLACK</option><option>EMAIL</option></select><input id="channelTarget" placeholder="Webhook URL or email"/><button id="saveChannelBtn" class="secondary" type="button">Save channel</button></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Approval Workflow</h3><span>Controlled policy/API changes</span></div><div id="approvalList"></div><div class="config-form compact-config"><input id="approvalTitle" placeholder="Approval title e.g. Increase PROD retention"/><select id="approvalType"><option value="policy_change">Policy change</option><option value="api_delete">API delete</option><option value="key_rotation">Key rotation</option></select><button id="createApprovalBtn" class="secondary" type="button">Request approval</button></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>API Key Usage Analytics</h3><span>Last used, requests, errors</span></div><div id="ingestKeyUsageList"></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Live Logs</h3><span>WebSocket streaming monitor</span></div><div class="live-log-actions"><button id="connectLiveLogsBtn" class="secondary" type="button">Connect live logs</button><button id="disconnectLiveLogsBtn" class="secondary danger" type="button">Disconnect</button></div><div id="liveLogStatus" class="helper-note">Not connected</div><div id="liveLogStream" class="mini-live-stream"></div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Role-Based Access</h3><span>Admin / Developer / Tester / Manager / Viewer</span></div><div id="roleList"></div><div class="config-form compact-config"><input id="roleEmail" placeholder="user@company.com"/><select id="roleValue"><option>viewer</option><option>developer</option><option>tester</option><option>manager</option><option>admin</option></select><button id="saveRoleBtn" class="secondary" type="button">Save role</button></div></div>
+          <div class="card ops-card wide"><div class="section-head"><h3>Topology</h3><span>Inferred service → endpoint workflow</span></div><div id="topologyCanvas" class="topology-canvas"></div><div class="helper-note" id="topologyNote">Topology is generated from logs. Add trace/correlation IDs and outbound dependency events for deeper workflow maps.</div></div>
+          <div class="card ops-card"><div class="section-head"><h3>Ask AI RCA</h3><span>Useful investigation starters</span></div><div id="rcaPromptList"></div></div>
         </div>
       </section>
       <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Run RCA from selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><div class="rca-quick" id="rcaQuickPrompts"></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
@@ -137,6 +144,6 @@
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v31"></script>
+  <script src="/app.js?v=20260505-v36"></script>
 </body>
 </html>

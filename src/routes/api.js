@@ -21,7 +21,7 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem, listNotificationChannels, upsertNotificationChannel, deleteNotificationChannel, listApprovalRequests, createApprovalRequest, reviewApprovalRequest, listUserRoles, upsertUserRole, deleteUserRole, getIngestKeyUsage, getTopology
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -311,6 +311,41 @@ router.get('/:workspace/:environment/audit-logs', asyncHandler(async (req, res) 
   res.json({ data: await getAuditLogs(normalizeWorkspace(req), normalizeEnvironment(req), req.query.limit || 50) })
 ));
 
+
+
+router.get('/:workspace/:environment/notification-channels', asyncHandler(async (req, res) =>
+  res.json({ data: await listNotificationChannels(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+router.post('/:workspace/:environment/notification-channels', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await upsertNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+router.delete('/:workspace/:environment/notification-channels/:id', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id) })
+));
+router.get('/:workspace/:environment/approvals', asyncHandler(async (req, res) =>
+  res.json({ data: await listApprovalRequests(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+router.post('/:workspace/:environment/approvals', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await createApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+router.post('/:workspace/:environment/approvals/:id/review', asyncHandler(async (req, res) =>
+  res.json({ data: await reviewApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id, req.body?.status || 'approved') })
+));
+router.get('/:workspace/:environment/roles', asyncHandler(async (req, res) =>
+  res.json({ data: await listUserRoles(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+router.post('/:workspace/:environment/roles', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await upsertUserRole(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+router.delete('/:workspace/:environment/roles/:id', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteUserRole(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id) })
+));
+router.get('/:workspace/:environment/ingest-key-usage', asyncHandler(async (req, res) =>
+  res.json({ data: await getIngestKeyUsage(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+router.get('/:workspace/:environment/topology', asyncHandler(async (req, res) =>
+  res.json({ data: await getTopology(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
 
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {
   const data = await getOverview(normalizeWorkspace(req), normalizeEnvironment(req));
