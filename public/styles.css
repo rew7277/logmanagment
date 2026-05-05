@@ -500,3 +500,251 @@ html.dark .json-pre { color: #a5f3fc !important; }
   margin-bottom: 12px !important;
   width: 100% !important;
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   V23: CLAUDE-STYLE SIDEBAR TOGGLE
+   ═══════════════════════════════════════════════════════ */
+
+/* Override ALL previous edge-toggle rules cleanly */
+.edge-toggle,
+.sidebar-toggle-btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+/* Sidebar header layout — brand + toggle on same row */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.sidebar-header .brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+/* The toggle button — minimal, always visible */
+.sidebar-toggle-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--line) !important;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.sidebar-toggle-btn:hover {
+  background: rgba(51,92,255,.09) !important;
+  color: var(--primary) !important;
+  border-color: rgba(51,92,255,.28) !important;
+}
+.sidebar-toggle-btn svg {
+  width: 18px;
+  height: 18px;
+  transition: transform .22s ease;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* When collapsed, flip the chevron to point right */
+.app-shell.sidebar-collapsed .sidebar-toggle-btn svg {
+  transform: rotate(180deg);
+}
+/* In collapsed (rail) mode, push toggle to become centred below logo */
+.app-shell.sidebar-collapsed .sidebar-header {
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.app-shell.sidebar-collapsed .sidebar-header .brand {
+  justify-content: center;
+}
+.app-shell.sidebar-collapsed .sidebar-toggle-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(51,92,255,.07) !important;
+  color: var(--primary) !important;
+  border-color: rgba(51,92,255,.18) !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   V23: MERGED APIs & ENDPOINTS PAGE
+   ═══════════════════════════════════════════════════════ */
+
+.api-endpoints-card { margin-bottom: 18px; }
+.api-endpoints-card .section-head { flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
+
+/* Search bar in header */
+.ae-search-wrap {
+  position: relative;
+  flex: 0 0 320px;
+}
+.ae-search-icon {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  display: flex;
+  pointer-events: none;
+}
+.ae-search-icon svg { width: 16px; height: 16px; }
+.ae-search-input {
+  width: 100%;
+  padding: 10px 14px 10px 38px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.ae-search-input:focus {
+  border-color: rgba(51,92,255,.4);
+  box-shadow: 0 0 0 3px rgba(51,92,255,.10);
+}
+
+/* Accordion card */
+.api-accordion {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: var(--panel);
+  transition: box-shadow .18s;
+}
+.api-accordion:hover { box-shadow: 0 8px 32px rgba(30,41,59,.08); }
+.api-accordion.open { border-color: rgba(51,92,255,.25); box-shadow: 0 8px 32px rgba(51,92,255,.08); }
+
+/* Accordion header button */
+.api-accordion-header {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 16px 18px;
+  cursor: pointer;
+  gap: 16px;
+  transition: background .15s;
+}
+.api-accordion-header:hover { background: rgba(51,92,255,.04); }
+.api-accordion.open .api-accordion-header { background: rgba(51,92,255,.05); }
+
+.api-acc-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.api-acc-chevron {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(51,92,255,.08);
+  flex-shrink: 0;
+  transition: background .15s;
+}
+.api-acc-chevron svg {
+  width: 16px;
+  height: 16px;
+  stroke: var(--primary);
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .22s ease;
+}
+.api-accordion.open .api-acc-chevron svg { transform: rotate(90deg); }
+.api-accordion.open .api-acc-chevron { background: rgba(51,92,255,.16); }
+
+.api-acc-name strong { display: block; font-size: 15px; }
+.api-acc-name small { display: block; color: var(--muted); font-weight: 800; font-size: 12px; margin-top: 2px; }
+
+.api-acc-stats {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.api-acc-stat { text-align: right; }
+.api-acc-stat small { display: block; color: var(--muted); font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.api-acc-stat b { font-size: 14px; }
+
+/* Accordion body — animated expand/collapse */
+.api-accordion-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .22s ease;
+}
+.api-accordion.open .api-accordion-body { grid-template-rows: 1fr; }
+.api-accordion-body-inner { overflow: hidden; }
+
+/* Endpoint inner table */
+.ep-inner-table {
+  padding: 0 18px 14px;
+  display: grid;
+  gap: 4px;
+}
+.ep-inner-header, .ep-inner-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 110px 80px 90px 80px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.ep-inner-header {
+  background: rgba(51,92,255,.05);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--muted);
+}
+.ep-inner-row {
+  border: 1px solid transparent;
+  transition: background .12s, border-color .12s;
+}
+.ep-inner-row:hover {
+  background: rgba(51,92,255,.04);
+  border-color: rgba(51,92,255,.12);
+}
+.ep-path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; font-weight: 700; }
+.ep-inner-empty {
+  padding: 14px 18px 18px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+@media (max-width: 900px) {
+  .api-acc-stats { gap: 12px; }
+  .ae-search-wrap { flex: 0 0 100%; }
+  .ep-inner-header, .ep-inner-row { grid-template-columns: 70px 1fr 90px 70px; }
+  .ep-inner-header span:nth-child(5),
+  .ep-inner-header span:nth-child(6),
+  .ep-inner-row span:nth-child(5),
+  .ep-inner-row span:nth-child(6) { display: none; }
+}
