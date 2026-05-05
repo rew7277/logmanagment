@@ -255,6 +255,7 @@ const statements = [
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
     password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'developer' CHECK (role IN ('admin','developer','tester','manager','viewer')),
     encrypted_profile TEXT,
     status TEXT NOT NULL DEFAULT 'active',
@@ -262,6 +263,10 @@ const statements = [
     UNIQUE(workspace_id, email)
   )`,
   `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS encrypted_profile TEXT`,
+  `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS password_salt TEXT`,
+  `UPDATE app_users SET password_salt = COALESCE(NULLIF(password_salt,''), split_part(password_hash, '$', 3), encode(gen_random_bytes(16), 'hex')) WHERE password_salt IS NULL OR password_salt = ''`,
+  `ALTER TABLE IF EXISTS app_users ALTER COLUMN password_salt SET DEFAULT encode(gen_random_bytes(16), 'hex')`,
+  `ALTER TABLE IF EXISTS app_users ALTER COLUMN password_salt SET NOT NULL`,
   `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
   `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'developer'`,
   `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()`,

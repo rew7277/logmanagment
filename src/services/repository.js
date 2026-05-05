@@ -1698,16 +1698,26 @@ export async function deleteApiRegistryItem(workspaceSlug, environmentName, payl
 // ─── Auth, RBAC, approval workflow and channels ──────────────────────────────
 const AUTH_SECRET = process.env.AUTH_ENCRYPTION_KEY || process.env.JWT_SECRET || 'observex-dev-secret-change-me';
 function sha(value='') { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
-function passwordHash(password='', salt=crypto.randomBytes(16).toString('hex')) {
-  const hash = crypto.pbkdf2Sync(String(password), salt, 120000, 32, 'sha256').toString('hex');
-  return `pbkdf2_sha256$120000$${salt}$${hash}`;
+function buildPasswordCredential(password='', salt=crypto.randomBytes(16).toString('hex')) {
+  const iterations = 120000;
+  const hash = crypto.pbkdf2Sync(String(password), salt, iterations, 32, 'sha256').toString('hex');
+  return { salt, hash: `pbkdf2_sha256$${iterations}$${salt}$${hash}` };
 }
-function verifyPassword(password='', stored='') {
+function passwordHash(password='', salt=crypto.randomBytes(16).toString('hex')) {
+  return buildPasswordCredential(password, salt).hash;
+}
+function verifyPassword(password='', stored='', storedSalt='') {
   const parts = String(stored).split('$');
-  if (parts.length !== 4) return false;
-  const [, iter, salt, hash] = parts;
-  const calc = crypto.pbkdf2Sync(String(password), salt, Number(iter)||120000, 32, 'sha256').toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(calc));
+  if (parts.length === 4) {
+    const [, iter, salt, hash] = parts;
+    const calc = crypto.pbkdf2Sync(String(password), salt, Number(iter)||120000, 32, 'sha256').toString('hex');
+    try { return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(calc)); } catch { return false; }
+  }
+  if (storedSalt) {
+    const calc = crypto.pbkdf2Sync(String(password), String(storedSalt), 120000, 32, 'sha256').toString('hex');
+    try { return crypto.timingSafeEqual(Buffer.from(String(stored)), Buffer.from(calc)); } catch { return false; }
+  }
+  return false;
 }
 function encryptionKey() { return crypto.createHash('sha256').update(AUTH_SECRET).digest(); }
 function encryptJson(obj={}) {
@@ -1745,7 +1755,8 @@ export async function registerUser(workspaceSlug, payload={}) {
     await query(`UPDATE invitation_codes SET used_count=used_count+1 WHERE id=$1`, [inv.rows[0].id]);
   }
   const profile = encryptJson({ full_name: payload.full_name || email.split('@')[0], workspace_name: workspaceName, created_ip: payload.ip || null });
-  const user = await query(`INSERT INTO app_users(workspace_id,email,password_hash,role,encrypted_profile) VALUES($1,$2,$3,$4,$5) RETURNING id,email,role,status,created_at`, [ws.id,email,passwordHash(password),role,profile]);
+  const credential = buildPasswordCredential(password);
+  const user = await query(`INSERT INTO app_users(workspace_id,email,password_hash,password_salt,role,encrypted_profile) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,email,role,status,created_at`, [ws.id,email,credential.hash,credential.salt,role,profile]);
   await audit(null, 'register', 'user', email, null, { role }).catch(()=>{});
   return createSessionForUser(user.rows[0], ws);
 }
@@ -1760,7 +1771,7 @@ export async function loginUser(workspaceSlug, payload={}) {
   if (!hasDatabase) return { token:`demo-token-${Date.now()}`, user:{email, role:'admin'}, workspace:{slug:workspaceSlug||'fsbl-prod-ops', name:'Demo Workspace'} };
   const r = await query(`SELECT * FROM app_users WHERE workspace_id=$1 AND email=$2 AND status='active'`, [ws.id,email]);
   const user = r.rows[0];
-  if (!user || !verifyPassword(payload.password||'', user.password_hash)) throw new Error('Invalid login credentials');
+  if (!user || !verifyPassword(payload.password||'', user.password_hash, user.password_salt)) throw new Error('Invalid login credentials');
   return createSessionForUser(user, ws);
 }
 export async function getUserBySession(token='') {

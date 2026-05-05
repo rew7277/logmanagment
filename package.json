@@ -1,6 +1,6 @@
 {
   "name": "observex-env-first-postgres",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "Environment-first log observability platform with PostgreSQL persistence for Railway",
   "main": "src/server.js",
   "type": "module",
