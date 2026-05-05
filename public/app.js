@@ -54,8 +54,8 @@ function setPage(page){
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
   if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
-  if(state.page==='apis')    { loadApisEndpoints(); loadDeployImpact(); }
-  if(state.page==='uploads') { loadUploadHistory(); }
+  if(state.page==='apis')    { loadApisEndpoints(); }
+  if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -64,8 +64,15 @@ function scoreTone(score){if(!score)return 'empty';if(score>=95)return 'good';if
 
 function sparklineBars(points){
   const arr = Array.isArray(points) ? points.map(p=>Number(p.count||0)) : [];
+  const nonZero = arr.filter(v => v > 0);
+  const unique = new Set(nonZero).size;
+  // Do not show decorative/fake-looking sparklines. Only render when real daily data has variation.
+  if (arr.length < 2 || nonZero.length < 2 || unique < 2) {
+    return `<span class="spark-empty" title="Trend needs at least two active days with different volumes">No trend</span>`;
+  }
   const max = Math.max(1, ...arr);
-  return `<span class="spark-bars" title="${esc((points||[]).map(p=>`${String(p.day||'').slice(0,10)}: ${fmt(p.count)}`).join(' | ') || '7-day log volume')}">${arr.map(v=>`<i style="height:${Math.max(3,Math.round((v/max)*22))}px"></i>`).join('')}</span>`;
+  const tooltip = (points||[]).map(p=>`${String(p.day||'').slice(0,10)}: ${fmt(p.count)}`).join(' | ');
+  return `<span class="spark-bars real" title="${esc(tooltip)}">${arr.map(v=>`<i style="height:${Math.max(3,Math.round((v/max)*22))}px"></i>`).join('')}</span>`;
 }
 function serviceEndpointOptions(serviceName=''){
   const seen=new Set();
@@ -108,9 +115,12 @@ async function loadErrorGroups(){
   try{
     const params=new URLSearchParams({service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',range:$('quickTime')?.value||'24h'});
     const rows=await api(endpoint('/error-groups?'+params));
-    host.innerHTML=rows.length?`<div class="error-group-grid">${rows.slice(0,6).map(g=>`<button class="error-group-chip" data-sig="${esc(g.signature||'')}"><b>${fmt(g.occurrences)}</b><span>${esc(String(g.signature||'Unknown').slice(0,58))}</span><small>Last ${new Date(g.last_seen).toLocaleTimeString()}</small></button>`).join('')}</div>`:'<span class="saved-empty">No grouped errors for current scope</span>';
+    const card = host.closest('.error-groups-card');
+    if (!rows.length) { host.innerHTML=''; if(card) card.hidden = true; return; }
+    if(card) card.hidden = false;
+    host.innerHTML=`<div class="error-group-grid">${rows.slice(0,6).map(g=>`<button class="error-group-chip" data-sig="${esc(g.signature||'')}"><b>${fmt(g.occurrences)}</b><span>${esc(String(g.signature||'Unknown').slice(0,58))}</span><small>Last ${new Date(g.last_seen).toLocaleTimeString()}</small></button>`).join('')}</div>`;
     $$('.error-group-chip').forEach(btn=>btn.onclick=()=>{$('logQuery').value=btn.dataset.sig||'';$('severityFilter').value='ERROR';searchLogs(1);});
-  }catch(e){host.innerHTML='<span class="saved-empty">Error grouping unavailable</span>';}
+  }catch(e){const card=host.closest('.error-groups-card'); if(card) card.hidden=true; host.innerHTML='';}
 }
 
 async function loadDeployImpact(){
@@ -194,10 +204,10 @@ async function loadApisEndpoints(q){
             <span class="api-acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></span>
             <div class="api-acc-name"><strong>${esc(s.name)}</strong><small>${svcEps.length} endpoint${svcEps.length!==1?'s':''} · Auto-discovered · ${esc(s.owner||'Unowned')} ${s.last_seen?'· Last seen '+new Date(s.last_seen).toLocaleTimeString():''} ${s.traffic_delta_pct!==null&&s.traffic_delta_pct!==undefined?'· Traffic '+(Number(s.traffic_delta_pct)>0?'+':'')+Number(s.traffic_delta_pct).toFixed(1)+'%':''}</small></div>
           </div>
-          <div class="api-acc-stats">
+          <div class="api-acc-stats metrics-clean">
             <div class="api-acc-stat trend"><small>7-day volume</small>${sparklineBars(s.volume_7d)}</div>
-            <div class="api-acc-stat"><small>Status</small><b class="status-badge ${esc(s.status||'observed')}">${esc(s.status||'observed')}</b></div>
-            <div class="api-acc-stat"><small>Error rate</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
+            <div class="api-acc-stat status-metric"><small>Status</small><b class="status-badge ${esc(s.status||'observed')}"><span class="status-dot"></span>${esc(s.status||'observed')}</b></div>
+            <div class="api-acc-stat"><small>Error</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
             <div class="api-acc-stat"><small>P95</small><b>${fmtMs(s.p95_latency_ms)}</b></div>
             <div class="api-acc-stat"><small>Health</small><b style="color:${health>=80?'var(--good)':health>=50?'var(--warn)':'var(--bad)'}">${health?health+'%':'—'}</b></div>
           </div>

@@ -49,9 +49,9 @@
           </div>
           <div id="apiEndpointList"></div>
         </div>
-        <div class="card impact-card"><div class="section-head"><h3>Deploy / Upload Impact</h3><span>Before-after error trend for recent uploads</span></div><div id="deployImpactList"></div></div>
+        
       </section>
-      <section class="page" data-page="logs"><div class="card log-search-card"><div class="section-head"><h3>Log Search</h3><span>Search after upload / API ingestion</span></div><div class="filter-grid pro"><div class="search-control"><span class="search-icon"><svg viewBox="0 0 24 24"><path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="7"/></svg></span><input id="logQuery" placeholder="Search message, API, endpoint, correlation ID..." /></div><select id="severityFilter"><option value="">All levels</option><option>DEBUG</option><option>INFO</option><option>WARN</option><option>ERROR</option><option>FATAL</option></select><select id="serviceFilter"><option value="">All APIs / services</option></select><select id="pathFilter"><option value="">All endpoints</option></select><select id="quickTime"><option value="all">All time</option><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><button id="searchLogsBtn" class="search-cta"><span class="pulse-dot"></span>Search Logs</button><button id="saveSearchBtn" class="secondary" type="button">Save search</button><button id="runAnomalyBtn" class="secondary" type="button">Run anomaly check</button></div><div class="saved-search-row"><b>Pinned searches</b><div id="savedSearches"></div></div><div id="activeTracePill" class="active-filter" hidden></div><div class="error-groups-card"><div class="section-head mini"><h3>Error Groups</h3><span>Grouped by signature</span></div><div id="errorGroups"></div></div><div class="log-toolbar"><span id="logResultCount">0 logs</span><div class="pager"><button id="prevLogsBtn" class="secondary">Previous</button><button id="nextLogsBtn" class="secondary">Next</button><button id="clearFiltersBtn" class="secondary">Clear filters</button></div></div><div class="log-stream" id="logStream"></div></div></section>
+      <section class="page" data-page="logs"><div class="card log-search-card compact"><div class="section-head compact-head"><h3>Log Search</h3><span>Search after upload / API ingestion</span></div><div class="log-filter-toolbar"><div class="search-control"><span class="search-icon"><svg viewBox="0 0 24 24"><path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="7"/></svg></span><input id="logQuery" placeholder="Search message, API, endpoint, correlation ID..." /></div><select id="severityFilter"><option value="">All levels</option><option>DEBUG</option><option>INFO</option><option>WARN</option><option>ERROR</option><option>FATAL</option></select><select id="serviceFilter"><option value="">All APIs / services</option></select><select id="pathFilter"><option value="">All endpoints</option></select><select id="quickTime"><option value="all">All time</option><option value="24h">Last 24 hours</option><option value="1h">Last 1 hour</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><button id="searchLogsBtn" class="search-cta"><span class="pulse-dot"></span>Search</button><button id="saveSearchBtn" class="icon-action" type="button" title="Save search">💾</button><button id="runAnomalyBtn" class="icon-action" type="button" title="Run anomaly check">⚡</button></div><div class="saved-search-row compact"><b>Pinned</b><div id="savedSearches"></div></div><div id="activeTracePill" class="active-filter" hidden></div><div class="error-groups-card" hidden><div class="section-head mini"><h3>Error Groups</h3><span>Grouped by signature</span></div><div id="errorGroups"></div></div><div class="log-toolbar compact"><span id="logResultCount">0 logs</span><div class="pager"><button id="prevLogsBtn" class="secondary">Previous</button><button id="nextLogsBtn" class="secondary">Next</button><button id="clearFiltersBtn" class="secondary">Clear filters</button></div></div><div class="log-stream" id="logStream"></div></div></section>
 
       <section class="page" data-page="uploads">
         <div class="card upload-history-card">
@@ -66,6 +66,7 @@
               <button id="deleteAllUploadsBtn" class="danger-subtle" type="button">Delete all history</button>
             </div>
           </div>
+          <div class="card impact-card upload-impact-card"><div class="section-head"><h3>Deploy / Upload Impact</h3><span>Before-after error trend for recent uploads</span></div><div id="deployImpactList"></div></div>
           <div class="history-summary" id="uploadHistorySummary"></div>
           <div class="upload-history-table" id="uploadHistoryTable"></div>
         </div>
@@ -82,6 +83,6 @@ Content-Type: text/plain
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v25"></script>
+  <script src="/app.js?v=20260505-v26"></script>
 </body>
 </html>
