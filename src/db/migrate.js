@@ -261,6 +261,10 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(workspace_id, email)
   )`,
+  `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS encrypted_profile TEXT`,
+  `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+  `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'developer'`,
+  `ALTER TABLE IF EXISTS app_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
   `CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
