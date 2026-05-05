@@ -538,7 +538,7 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
       const traceValues = [];
       const tracePlaceholders = [];
       traceBatch.forEach((t, idx) => {
-        const base = idx * 8;
+        const base = idx * 7; // 7 bound params per row (latency_ms is hardcoded as 0, not a $N param)
         const payload = t.payload || {};
         tracePlaceholders.push(`($${base+1}::uuid,$${base+2}::uuid,$${base+3}::uuid,$${base+4}::text,$${base+5}::text,0,COALESCE($${base+6}::timestamptz, now()),$${base+7}::jsonb)`);
         traceValues.push(
