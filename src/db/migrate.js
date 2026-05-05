@@ -245,7 +245,7 @@ const statements = [
     source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','tombstone')),
     status TEXT NOT NULL DEFAULT 'observed',
     deleted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`,
   `CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`

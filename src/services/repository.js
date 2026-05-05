@@ -64,6 +64,36 @@ function fallbackEndpoints(environmentName) {
 }
 
 
+let apiRegistrySchemaReady = false;
+async function ensureApiRegistrySchema() {
+  if (!hasDatabase || apiRegistrySchemaReady) return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS api_registry (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+      service_name TEXT NOT NULL,
+      method TEXT,
+      path TEXT,
+      entry_type TEXT NOT NULL DEFAULT 'endpoint',
+      source TEXT NOT NULL DEFAULT 'manual',
+      status TEXT NOT NULL DEFAULT 'observed',
+      deleted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS method TEXT`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS path TEXT`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS entry_type TEXT NOT NULL DEFAULT 'endpoint'`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'observed'`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+    await query(`ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`);
+    apiRegistrySchemaReady = true;
+  } catch (error) {
+    console.warn('[api_registry] schema ensure failed:', error.message);
+  }
+}
 
 async function ensureWorkspaceEnvironment(workspaceSlug='fsbl-prod-ops', environmentName='PROD') {
   const org = await query(`INSERT INTO organizations(name, slug) VALUES($1,$2)
@@ -158,6 +188,7 @@ export async function getServices(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
   if (!hasDatabase) return fallbackServices(environmentName);
+  await ensureApiRegistrySchema();
   const result = await query(
     `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status,
             GREATEST(0, LEAST(100,
@@ -231,6 +262,7 @@ export async function getEndpoints(workspaceSlug, environmentName, serviceName =
     const rows = fallbackEndpoints(environmentName);
     return serviceName ? rows.filter(r => r.service_name === serviceName) : rows;
   }
+  await ensureApiRegistrySchema();
   const values = [env.id];
   const serviceClause = serviceName ? ` AND s.name=$2` : '';
   if (serviceName) values.push(serviceName);
@@ -1630,6 +1662,7 @@ export async function createManualApiEndpoint(workspaceSlug, environmentName, pa
     const row = { id: `manual-${Date.now()}`, service_name: service, method, path, entry_type: entryType, status: 'observed', source: 'manual' };
     list.unshift(row); fallback.manualApis.set(key, list); return row;
   }
+  await ensureApiRegistrySchema();
   await query(`DELETE FROM api_registry WHERE environment_id=$1 AND service_name=$2 AND COALESCE(method,'')=COALESCE($3,'') AND COALESCE(path,'')=COALESCE($4,'') AND source='manual'`, [env.id, service, entryType === 'endpoint' ? method : null, entryType === 'endpoint' ? path : null]);
   const result = await query(`INSERT INTO api_registry(environment_id, service_name, method, path, entry_type, source, status)
     VALUES($1,$2,$3,$4,$5,'manual','observed') RETURNING *`, [env.id, service, entryType === 'endpoint' ? method : null, entryType === 'endpoint' ? path : null, entryType]);
@@ -1646,6 +1679,7 @@ export async function deleteApiRegistryItem(workspaceSlug, environmentName, payl
   const entryType = path ? 'endpoint' : 'service';
   if (!id && !service) throw new Error('API/service details are required');
   if (!hasDatabase) return { deleted: 1, tombstone: true };
+  await ensureApiRegistrySchema();
   let deleted = 0;
   if (id) {
     const d = await query(`UPDATE api_registry SET deleted_at=now() WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, id]);
