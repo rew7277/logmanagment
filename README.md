@@ -254,3 +254,18 @@ npm install
 npm run db:migrate
 npm start
 ```
+
+
+## V37 enterprise login and settings
+
+Added a futuristic login/create-account screen. Passwords are stored as salted PBKDF2 hashes in PostgreSQL (`app_users`), not plain text. Invitation codes are stored as SHA-256 hashes and shown only once.
+
+New Settings page after login includes account info, invite-code generation, and shortcuts to Ops controls such as AI Provider, Ingestion API Keys, PII Masking, Retention/Rate Limit, Roles, Approvals, and API Docs.
+
+Run after deploy:
+
+```bash
+npm run db:migrate
+```
+
+Topology note: the topology view is inferred from service, endpoint, error and trace/correlation fields. For true end-to-end flow maps, send outbound dependency events with the same `trace_id`/`correlation_id` from MuleSoft flows.

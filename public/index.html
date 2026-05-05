@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260505-v36" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-v37" />
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -31,6 +31,7 @@
         <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon" data-icon="ops"></span><span class="label">Ops</span></a>
         <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">AI RCA</span></a>
         <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon" data-icon="docs"></span><span class="label">API Docs</span></a>
+        <a class="nav-item" href="#settings" data-page-link="settings"><span class="icon" data-icon="ops"></span><span class="label">Settings</span></a>
       </nav>
       <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
     </aside>
@@ -116,6 +117,15 @@
         </div>
       </section>
       <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Run RCA from selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><div class="rca-quick" id="rcaQuickPrompts"></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
+
+      <section class="page" data-page="settings">
+        <div class="settings-grid">
+          <div class="card settings-card"><div class="section-head"><h3>Account & Workspace</h3><span>Encrypted password storage</span></div><div id="settingsUser"></div><div class="helper-note">Passwords are stored as salted PBKDF2 hashes in PostgreSQL. API keys are never stored in plain text.</div></div>
+          <div class="card settings-card"><div class="section-head"><h3>User Invitations</h3><span>Create invite codes</span></div><div class="config-form compact-config"><select id="inviteRole"><option>viewer</option><option>developer</option><option>tester</option><option>manager</option><option>admin</option></select><button id="createInviteBtn" class="secondary" type="button">Generate invite code</button></div><pre id="inviteOutput" class="secret-output">Invite code will appear here once.</pre><div id="inviteList"></div></div>
+          <div class="card settings-card"><div class="section-head"><h3>Operational Settings</h3><span>Central control layer</span></div><div class="settings-link-grid"><button onclick="setPage('ops')" class="secondary">AI Provider</button><button onclick="setPage('ops')" class="secondary">Ingestion API Keys</button><button onclick="setPage('ops')" class="secondary">PII Masking</button><button onclick="setPage('ops')" class="secondary">Retention & Rate Limits</button><button onclick="setPage('ops')" class="secondary">Roles & Approvals</button><button onclick="setPage('apiDocs')" class="secondary">API Docs</button></div></div>
+        </div>
+      </section>
+
       <section class="page" data-page="apiDocs">
         <div class="card api-docs-shell">
           <div class="section-head"><h3>API Documentation & Live Tester</h3><span>Postman-style request console</span></div>
@@ -144,6 +154,6 @@
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v36"></script>
+  <script src="/app.js?v=20260505-v37"></script>
 </body>
 </html>

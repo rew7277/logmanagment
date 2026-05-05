@@ -288,7 +288,33 @@ const statements = [
   `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS last_error TEXT`
 
 
-
+,
+  `CREATE TABLE IF NOT EXISTS app_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+    email TEXT NOT NULL UNIQUE,
+    full_name TEXT,
+    role TEXT NOT NULL DEFAULT 'admin',
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ
+  )`,
+  `CREATE TABLE IF NOT EXISTS invite_codes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL UNIQUE,
+    code_prefix TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'viewer',
+    status TEXT NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMPTZ,
+    used_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_app_users_workspace ON app_users(workspace_id, role)`,
+  `CREATE INDEX IF NOT EXISTS idx_invite_codes_workspace ON invite_codes(workspace_id, status)`
 ];
 
 export async function migrate() {

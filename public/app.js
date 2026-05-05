@@ -6,7 +6,7 @@ const setText = (id, text) => { const el = $(id); if (el) el.textContent = text;
 const state = {
   workspace: 'fsbl-prod-ops',
   environment: localStorage.getItem('observex-env') || 'PROD',
-  theme: localStorage.getItem('observex-theme') || 'light',
+  theme: localStorage.getItem('observex-theme') || 'dark',
   sidebar: localStorage.getItem('observex-sidebar') || 'open',
   page: (location.hash?.slice(1) === 'traces' ? 'logs' : (location.hash?.slice(1) === 'endpoints' ? 'apis' : (location.hash?.slice(1) || 'overview'))),
   apiKey: localStorage.getItem('observex-ingest-key') || '',
@@ -21,7 +21,9 @@ const state = {
   aeQuery: '',
   services: [],
   endpoints: [],
-  liveWs: null
+  liveWs: null,
+  authToken: localStorage.getItem('observex-auth-token') || '',
+  user: JSON.parse(localStorage.getItem('observex-user') || 'null')
 };
 
 const icons = {
@@ -45,13 +47,13 @@ function endpoint(path){return `/api/${state.workspace}/${state.environment}${pa
 function apiBaseUrl(){return window.location.origin;}
 function fullEndpoint(path){return `${apiBaseUrl()}${endpoint(path)}`;}
 async function api(url,opt={}){const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
-function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');localStorage.setItem('observex-theme',state.theme);$('themeIcon')&&($('themeIcon').textContent=state.theme==='dark'?'☀':'☾');}
+function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');document.body.classList.toggle('dark',state.theme==='dark');localStorage.setItem('observex-theme',state.theme);$('themeIcon')&&($('themeIcon').textContent=state.theme==='dark'?'☀':'☾'); const lbl=$('themeToggle')?.querySelector('.label'); if(lbl) lbl.textContent=state.theme==='dark'?'Light mode':'Dark mode';}
 function applySidebar(){const closed=state.sidebar==='closed';$('appShell')&&$('appShell').classList.toggle('sidebar-collapsed',closed);localStorage.setItem('observex-sidebar',state.sidebar);}
 function setPage(page){
   state.page=(page==='traces'?'logs':(page==='endpoints'?'apis':(page||'overview')));
   $$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));
   $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));
-  const titles={overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs'};
+  const titles={overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs',settings:'Settings'};
   setText('pageTitle',titles[state.page]||'Overview');
   $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
@@ -62,6 +64,7 @@ function setPage(page){
   if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
   if(state.page==='ops') { loadAlertsOps(); }
   if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
+  if(state.page==='settings') { loadSettingsPage(); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -544,7 +547,7 @@ async function loadEnvironmentConfig(){
     if($('aiProvider')) $('aiProvider').value = rca.provider || 'local';
     if($('aiModel')) $('aiModel').value = rca.model || '';
     if($('aiEnabled')) $('aiEnabled').checked = rca.enabled !== false;
-    if($('aiProviderInfo')) $('aiProviderInfo').innerHTML = `<div><span class="tiny-badge">Current Provider</span><h4>${esc(rca.provider || 'local')}</h4><p>Model: <b>${esc(rca.model || 'local-rule-engine')}</b></p><small>${rca.enabled ? 'External AI enabled when API key is present.' : 'Local rule engine only. No external API calls.'}</small></div>`;
+    if($('aiProviderInfo')) $('aiProviderInfo').innerHTML = `<div class="ai-provider-state"><span class="tiny-badge">Current Provider</span><h4>${esc(rca.provider || 'local')}</h4><p>Model: <b>${esc(rca.model || 'local-rule-engine')}</b></p><small>${rca.enabled ? 'External AI enabled when API key is present.' : 'Local rule engine only. No external API calls.'}</small></div>`;
     await Promise.allSettled([loadIngestKeys(), loadAuditLogs()]);
   }catch(e){ console.warn('config unavailable', e); }
 }
@@ -867,6 +870,32 @@ async function deleteApiRegistry(payload){
   }catch(e){toast(e.message,'error');}
 }
 
+
+function showAuthScreen(mode='login'){
+  if($('authScreen')) $('authScreen').remove();
+  const el=document.createElement('div'); el.id='authScreen'; el.className='auth-screen';
+  el.innerHTML=`<div class="auth-orb orb-a"></div><div class="auth-orb orb-b"></div><div class="auth-card">
+    <div class="auth-brand"><div class="logo">OX</div><div><h1>ObserveX</h1><p>Secure workspace observability</p></div></div>
+    <div class="auth-tabs"><button id="authLoginTab" class="${mode==='login'?'active':''}">Login</button><button id="authCreateTab" class="${mode==='create'?'active':''}">Create account</button></div>
+    <div id="authLogin" class="auth-pane ${mode==='login'?'active':''}"><h2>Welcome back</h2><p>Sign in to your workspace command center.</p><input id="loginEmail" placeholder="Email"/><input id="loginPassword" type="password" placeholder="Password"/><button id="loginBtn">Login</button><small id="authMsg"></small></div>
+    <div id="authCreate" class="auth-pane ${mode==='create'?'active':''}"><h2>Create workspace</h2><p>Use an invitation code to join an existing workspace, or leave it empty to create as admin.</p><input id="regName" placeholder="Full name"/><input id="regEmail" placeholder="Email"/><input id="regPassword" type="password" placeholder="Password min 8 chars"/><input id="regWorkspace" placeholder="Workspace name e.g. FSBL Production Ops"/><input id="regInvite" placeholder="Invitation code optional"/><button id="registerBtn">Create account</button><small id="authCreateMsg"></small></div>
+  </div>`;
+  document.body.appendChild(el);
+  $('authLoginTab').onclick=()=>showAuthScreen('login'); $('authCreateTab').onclick=()=>showAuthScreen('create');
+  $('loginBtn').onclick=loginUser; $('registerBtn').onclick=registerUser;
+}
+async function authFetch(path,opt={}){ const headers={...(opt.headers||{})}; if(state.authToken) headers.Authorization=`Bearer ${state.authToken}`; return api(path,{...opt,headers}); }
+async function loginUser(){ try{ const res=await api('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('loginEmail').value,password:$('loginPassword').value})}); state.authToken=res.token; state.user=res.user; localStorage.setItem('observex-auth-token',res.token); localStorage.setItem('observex-user',JSON.stringify(res.user)); if(res.user?.workspace_slug) state.workspace=res.user.workspace_slug; $('authScreen')?.remove(); toast('Logged in','success'); await refreshAll(); }catch(e){ setText('authMsg',e.message); }}
+async function registerUser(){ try{ const res=await api('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:$('regName').value,email:$('regEmail').value,password:$('regPassword').value,workspace_name:$('regWorkspace').value,invite_code:$('regInvite').value})}); state.authToken=res.token; state.user=res.user; localStorage.setItem('observex-auth-token',res.token); localStorage.setItem('observex-user',JSON.stringify(res.user)); if(res.user?.workspace_slug) state.workspace=res.user.workspace_slug; $('authScreen')?.remove(); toast('Account created','success'); await refreshAll(); }catch(e){ setText('authCreateMsg',e.message); }}
+function logoutUser(){ localStorage.removeItem('observex-auth-token'); localStorage.removeItem('observex-user'); state.authToken=''; state.user=null; showAuthScreen('login'); }
+async function createInviteCode(){ try{ const role=$('inviteRole')?.value||'developer'; const res=await authFetch('/api/auth/invite-codes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role})}); if($('inviteOutput')) $('inviteOutput').textContent=`Copy now. Invite code is shown only once:\n${res.invite_code}`; await loadSettingsPage(); toast('Invite code generated','success'); }catch(e){toast(e.message,'error');} }
+async function loadSettingsPage(){
+  if($('settingsUser')) $('settingsUser').innerHTML=`<div class="settings-user-card"><b>${esc(state.user?.email||'Not signed in')}</b><small>Role: ${esc(state.user?.role||'viewer')} · Workspace: ${esc(state.workspace)}</small><button id="logoutBtn" class="secondary danger" type="button">Logout</button></div>`;
+  $('logoutBtn')&&($('logoutBtn').onclick=logoutUser);
+  $('createInviteBtn')&&($('createInviteBtn').onclick=createInviteCode);
+  try{ const rows=await authFetch('/api/auth/invite-codes'); if($('inviteList')) $('inviteList').innerHTML=rows.length?rows.map(i=>`<div class="audit-row"><b>${esc(i.code_prefix||'invite')}••••</b><small>${esc(i.role)} · ${esc(i.status)} · ${i.expires_at?'expires '+new Date(i.expires_at).toLocaleDateString():'no expiry'}</small></div>`).join(''):empty('No invite codes yet.'); }catch(e){ if($('inviteList')) $('inviteList').innerHTML=empty('Login to manage invite codes.'); }
+}
+
 function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('saveChannelBtn'))$('saveChannelBtn').onclick=saveNotificationChannel;if($('createApprovalBtn'))$('createApprovalBtn').onclick=createApproval;if($('saveRoleBtn'))$('saveRoleBtn').onclick=saveRole;if($('connectLiveLogsBtn'))$('connectLiveLogsBtn').onclick=connectLiveLogs;if($('disconnectLiveLogsBtn'))$('disconnectLiveLogsBtn').onclick=disconnectLiveLogs;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
-(async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
+(async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll(); if(!state.authToken) showAuthScreen('login');})();
