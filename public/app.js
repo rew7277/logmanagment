@@ -71,8 +71,141 @@ async function loadEndpoints(){const rows=await api(endpoint('/endpoints'));cons
 async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmt(t.latency_ms)}ms</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id are searchable; trace waterfall needs trace ingestion.');}
 
 function logParams(page=state.logPage){return new URLSearchParams({limit:String(state.logPageSize),page:String(page),q:$('logQuery')?.value||'',severity:$('severityFilter')?.value||'',service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',trace_id:state.traceFilter||'',upload_id:state.uploadFilter||'',range:$('quickTime')?.value||'all'});}
-async function searchLogs(page=state.logPage){state.logPage=Math.max(page,1);const result=await api(endpoint('/logs?'+logParams(state.logPage)));const rows=Array.isArray(result)?result:(result.items||[]);state.lastLogs=rows;const total=Array.isArray(result)?rows.length:result.total;if($('activeTracePill')){if(state.traceFilter){$('activeTracePill').hidden=false;$('activeTracePill').innerHTML=`Trace investigation active: <b>${esc(state.traceFilter)}</b> <button id="clearTraceInvestigation">Clear trace</button>`;setTimeout(()=>{$('clearTraceInvestigation')&&($('clearTraceInvestigation').onclick=()=>{state.traceFilter='';state.uploadFilter='';searchLogs(1);});});}else{$('activeTracePill').hidden=true;$('activeTracePill').innerHTML='';}}$('logResultCount')&&($('logResultCount').textContent=`${fmt(total)} logs · page ${result.page||state.logPage} of ${result.total_pages||1}`);setHtml('logStream', rows.length?rows.map((l,i)=>`<button class="log-line ${esc(l.severity)}" data-log-index="${i}"><div class="log-meta"><span class="level ${esc(l.severity)}">${esc(l.severity)}</span><span>${new Date(l.timestamp).toLocaleString()}</span><span>${esc(l.service_name||'-')}</span><span>${esc((l.method||'')+' '+(l.path||''))}</span>${(l.trace_id||l.raw?.event_id)?'<span class="trace-chip">Trace/Event</span>':''}</div><div class="log-message">${esc(l.message)}</div></button>`).join(''):empty('No logs matched. Upload logs from Overview or relax filters.'));if($('prevLogsBtn')) $('prevLogsBtn').disabled=(result.page||1)<=1;if($('nextLogsBtn')) $('nextLogsBtn').disabled=(result.page||1)>=(result.total_pages||1);$$('.log-line[data-log-index]').forEach(btn=>btn.onclick=()=>openLogModal(state.lastLogs[Number(btn.dataset.logIndex)]));}
-function openLogModal(log){if(!log)return;state.selectedLog=log;setText('modalTitle',`${log.severity||'LOG'} · ${log.service_name||'Unknown service'}`);$('modalTraceBtn')&&($('modalTraceBtn').disabled=!log.trace_id);setHtml('modalBody',`<div class="modal-grid"><div><small>Timestamp</small><b>${esc(new Date(log.timestamp).toLocaleString())}</b></div><div><small>Service</small><b>${esc(log.service_name||'-')}</b></div><div><small>Endpoint</small><b>${esc((log.method||'')+' '+(log.path||''))}</b></div><div><small>Trace / Event ID</small><b>${esc(log.trace_id||log.raw?.event_id||'-')}</b></div><div><small>Correlation ID</small><b>${esc(log.raw?.correlation_id||log.trace_id||'-')}</b></div><div><small>Transaction ID</small><b>${esc(log.raw?.transaction_id||'-')}</b></div><div><small>Severity</small><b>${esc(log.severity||'-')}</b></div></div><h4>Message</h4><pre>${esc(log.message||'')}</pre><h4>Raw event</h4><pre>${esc(JSON.stringify(log.raw||log,null,2))}</pre>`);$('logModal')&&$('logModal').classList.add('open');}
+async function searchLogs(page=state.logPage){
+  state.logPage=Math.max(page,1);
+  const result=await api(endpoint('/logs?'+logParams(state.logPage)));
+  const rows=Array.isArray(result)?result:(result.items||[]);
+  state.lastLogs=rows;
+  const total=Array.isArray(result)?rows.length:result.total;
+  if($('activeTracePill')){
+    if(state.traceFilter){
+      $('activeTracePill').hidden=false;
+      $('activeTracePill').innerHTML=`Trace investigation active: <b>${esc(state.traceFilter)}</b> <button id="clearTraceInvestigation">Clear trace</button>`;
+      setTimeout(()=>{$('clearTraceInvestigation')&&($('clearTraceInvestigation').onclick=()=>{state.traceFilter='';state.uploadFilter='';searchLogs(1);});});
+    } else {$('activeTracePill').hidden=true;$('activeTracePill').innerHTML='';}
+  }
+  $('logResultCount')&&($('logResultCount').textContent=`${fmt(total)} logs · page ${result.page||state.logPage} of ${result.total_pages||1}`);
+
+  function sevColor(s){return{ERROR:'#ff4d6d',FATAL:'#c9184a',WARN:'#f77f00',INFO:'#4cc9f0',DEBUG:'#adb5bd'}[s]||'#adb5bd';}
+  function latencyBadge(raw){
+    const m=String(raw?.original||'').match(/(?:took|latency|duration|elapsed|response[_-]?time)\s*[:=]?\s*(\d+)\s*ms/i);
+    if(!m) return '';
+    const ms=Number(m[1]);
+    const color=ms>2000?'#ff4d6d':ms>500?'#f77f00':'#2dc653';
+    return `<span class="latency-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${ms}ms</span>`;
+  }
+  function httpBadge(raw){
+    const p=raw?.payload; const st=p?.exit?.HttpStatus||p?.statusCode||p?.status;
+    if(!st) return '';
+    const s=Number(st); const color=s>=500?'#ff4d6d':s>=400?'#f77f00':s>=200?'#2dc653':'#adb5bd';
+    return `<span class="http-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">HTTP ${s}</span>`;
+  }
+  function flowBadge(raw){
+    const fn=raw?.payload?.entry?.FlowName||raw?.payload?.common?.ApplicationName;
+    if(!fn) return '';
+    return `<span class="flow-badge" title="Flow: ${esc(fn)}">${esc(fn.length>22?fn.slice(0,20)+'…':fn)}</span>`;
+  }
+  function traceChip(l){
+    const tid=l.trace_id||l.raw?.event_id||l.raw?.correlation_id;
+    if(!tid) return '';
+    return `<span class="trace-chip" title="Trace: ${esc(tid)}">⛓ Trace</span>`;
+  }
+  function msgHighlight(msg,q){
+    if(!q||!msg) return esc(msg||'');
+    const re=new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');
+    return esc(msg).replace(re,'<mark>$1</mark>');
+  }
+  const q=($('logQuery')?.value||'').trim();
+
+  setHtml('logStream', rows.length ? `
+    <div class="log-analytics-bar">
+      <span class="lag-stat">
+        ${['ERROR','WARN','INFO','DEBUG','FATAL'].map(s=>{const c=rows.filter(r=>r.severity===s).length; return c?`<span class="lag-pill" style="background:${sevColor(s)}22;color:${sevColor(s)}">${s} <b>${c}</b></span>`:''}).join('')}
+      </span>
+      <span class="lag-meta">${fmt(total)} total · ${rows.length} shown</span>
+    </div>
+    ${rows.map((l,i)=>`
+    <button class="log-line v21 ${esc(l.severity)}" data-log-index="${i}" style="border-left:3px solid ${sevColor(l.severity)}">
+      <div class="log-meta v21">
+        <span class="level ${esc(l.severity)}">${esc(l.severity)}</span>
+        <span class="log-ts">${new Date(l.timestamp).toLocaleTimeString()}<span class="log-date"> ${new Date(l.timestamp).toLocaleDateString()}</span></span>
+        <span class="log-svc">${esc(l.service_name||'—')}</span>
+        ${l.method?`<span class="method-badge meth-${esc(l.method)}">${esc(l.method)}</span>`:''}
+        ${l.path?`<span class="log-path" title="${esc(l.path)}">${esc(l.path.length>40?l.path.slice(0,38)+'…':l.path)}</span>`:''}
+        ${latencyBadge(l.raw)} ${httpBadge(l.raw)} ${traceChip(l)} ${flowBadge(l.raw)}
+      </div>
+      <div class="log-message v21">${msgHighlight(l.message,q)}</div>
+    </button>`).join('')}` :
+    empty('No logs matched. Upload logs from Overview or relax filters.'));
+
+  if($('prevLogsBtn')) $('prevLogsBtn').disabled=(result.page||1)<=1;
+  if($('nextLogsBtn')) $('nextLogsBtn').disabled=(result.page||1)>=(result.total_pages||1);
+  $$('.log-line[data-log-index]').forEach(btn=>btn.onclick=()=>openLogModal(state.lastLogs[Number(btn.dataset.logIndex)]));
+}
+function openLogModal(log){
+  if(!log) return;
+  state.selectedLog=log;
+  const sevColors={ERROR:'#ff4d6d',FATAL:'#c9184a',WARN:'#f77f00',INFO:'#4cc9f0',DEBUG:'#adb5bd'};
+  const sc=sevColors[log.severity]||'#adb5bd';
+  setText('modalTitle',`${log.severity||'LOG'} · ${log.service_name||'Unknown service'}`);
+  $('modalTraceBtn')&&($('modalTraceBtn').disabled=!log.trace_id);
+
+  // Extract analytics from raw
+  const raw=log.raw||{};
+  const payload=raw.payload||{};
+  const entry=payload.entry||{};
+  const exit_=payload.exit||{};
+  const common=payload.common||{};
+  const latMs=String(raw.original||log.message||'').match(/(?:took|latency|duration|elapsed|response[_-]?time)\s*[:=]?\s*(\d+)\s*ms/i)?.[1];
+  const httpSt=exit_?.HttpStatus||payload?.statusCode||payload?.status;
+  const flowIn=entry?.FlowName; const flowOut=exit_?.FlowName;
+  const tsIn=entry?.TimestampIST; const tsOut=exit_?.TimestampIST;
+  const durationMs = (tsIn&&tsOut) ? Math.round((new Date(tsOut)-new Date(tsIn))) : null;
+  const appName=common?.ApplicationName||null;
+  const reqUri=common?.RequestUri||null;
+  const corrId=common?.correlationId||raw?.correlation_id||log.trace_id;
+
+  // Analytics section (only shown if we have enriched data)
+  const hasAnalytics = latMs||httpSt||flowIn||appName||reqUri||durationMs;
+  const analyticsHtml = hasAnalytics ? `
+    <div class="modal-section analytics-section">
+      <div class="modal-section-title">📊 Analytics</div>
+      <div class="modal-grid analytics-grid">
+        ${appName?`<div><small>Application</small><b>${esc(appName)}</b></div>`:''}
+        ${reqUri?`<div><small>Request URI</small><b>${esc(reqUri)}</b></div>`:''}
+        ${flowIn?`<div><small>Flow</small><b>${esc(flowIn)}</b></div>`:''}
+        ${httpSt?`<div><small>HTTP Status</small><b style="color:${Number(httpSt)>=400?'#ff4d6d':'#2dc653'}">${esc(String(httpSt))}</b></div>`:''}
+        ${latMs?`<div><small>Observed Latency</small><b style="color:${Number(latMs)>2000?'#ff4d6d':Number(latMs)>500?'#f77f00':'#2dc653'}">${latMs}ms</b></div>`:''}
+        ${durationMs!==null?`<div><small>End-to-End Duration</small><b style="color:${durationMs>3000?'#ff4d6d':durationMs>1000?'#f77f00':'#2dc653'}">${durationMs}ms</b></div>`:''}
+      </div>
+    </div>` : '';
+
+  setHtml('modalBody',`
+    <div class="modal-section" style="border-left:3px solid ${sc};padding-left:12px">
+      <div class="modal-grid">
+        <div><small>Timestamp</small><b>${esc(new Date(log.timestamp).toLocaleString())}</b></div>
+        <div><small>Severity</small><b style="color:${sc}">${esc(log.severity||'-')}</b></div>
+        <div><small>Service</small><b>${esc(log.service_name||'-')}</b></div>
+        <div><small>Endpoint</small><b>${esc((log.method||'')+' '+(log.path||''))}</b></div>
+        <div><small>Trace / Event ID</small><b class="copy-field" title="Click to copy">${esc(log.trace_id||raw?.event_id||'-')}</b></div>
+        <div><small>Correlation ID</small><b class="copy-field" title="Click to copy">${esc(corrId||'-')}</b></div>
+        <div><small>Transaction ID</small><b>${esc(raw?.transaction_id||'-')}</b></div>
+      </div>
+    </div>
+    ${analyticsHtml}
+    <div class="modal-section">
+      <div class="modal-section-title">💬 Message</div>
+      <pre class="modal-pre">${esc(log.message||'')}</pre>
+    </div>
+    <div class="modal-section">
+      <div class="modal-section-title">🗂 Raw Event</div>
+      <pre class="modal-pre json-pre">${esc(JSON.stringify(log.raw||log,null,2))}</pre>
+    </div>
+  `);
+  // Copy-on-click
+  $$('.copy-field').forEach(el=>el.onclick=()=>{navigator.clipboard?.writeText(el.textContent).then(()=>toast('Copied!','success'));});
+  $('logModal')&&$('logModal').classList.add('open');
+}
 function closeLogModal(){ $('logModal')&&$('logModal').classList.remove('open'); }
 
 
@@ -175,26 +308,53 @@ function showIngestProgress(job){
   const box=$('ingestProgress'); if(!box) return;
   box.hidden=false;
   const totalBytes = Number(job.bytes || 0);
-  const inserted = Number(job.inserted || 0);
-  const parsed = Number(job.parsed || 0);
+  const inserted   = Number(job.inserted || 0);
+  const parsed     = Number(job.parsed   || 0);
+  const speed      = Number(job.speed    || 0);
+  const parseMs    = Number(job.parse_ms || 0);
+  const insertMs   = Number(job.insert_ms|| 0);
+  const peakHeap   = Number(job.peak_heap_mb || 0);
+
   let pct = 8;
-  if(job.status==='queued') pct=18;
-  else if(job.status==='processing') pct = Math.min(96, 22 + Math.round(Math.max(inserted, parsed) / Math.max(parsed || inserted || 1, 1) * 60));
-  else if(job.status==='completed') pct=100;
-  else if(job.status==='failed') pct=100;
-  setText('ingestStage', job.stage || job.status || 'Processing');
-  setText('ingestMeta', `${esc(job.fileName||'upload')} · ${fmt(Math.round(totalBytes/1024))} KB · ${esc(job.status||'')}`);
+  if(job.status==='queued')      pct = 18;
+  else if(job.status==='processing'){
+    // Use parsed vs inserted to show two-phase progress
+    const parsePhase   = parsed  ? Math.min(50, 18 + Math.round(parsed  / Math.max(parsed, 1)  * 40)) : 18;
+    const insertPhase  = inserted? Math.min(96, 58 + Math.round(inserted/ Math.max(parsed||inserted,1) * 38)) : parsePhase;
+    pct = Math.max(parsePhase, insertPhase);
+  }
+  else if(job.status==='completed') pct = 100;
+  else if(job.status==='failed')    pct = 100;
+
+  setText('ingestStage',   job.stage || job.status || 'Processing');
+  setText('ingestMeta',    `${esc(job.fileName||'upload')} · ${fmt(Math.round(totalBytes/1024))} KB · ${esc(job.status||'')}`);
   setText('ingestPercent', `${pct}%`);
-  setText('ingestParsed', `${fmt(parsed)} parsed`);
-  setText('ingestInserted', `${fmt(inserted)} inserted`);
-  setText('ingestSpeed', `${fmt(job.speed||0)} logs/sec`);
+  setText('ingestParsed',  `${fmt(parsed)} parsed`);
+  setText('ingestInserted',`${fmt(inserted)} inserted`);
+  setText('ingestSpeed',   `${fmt(speed)} logs/sec`);
+
+  // v21: extra telemetry fields
+  const telEl=$('ingestTelemetry');
+  if(telEl){
+    const parts=[];
+    if(parseMs>0)  parts.push(`Parse ${parseMs<1000?parseMs+'ms':((parseMs/1000).toFixed(1)+'s')}`);
+    if(insertMs>0) parts.push(`DB ${insertMs<1000?insertMs+'ms':((insertMs/1000).toFixed(1)+'s')}`);
+    if(peakHeap>0) parts.push(`Peak ${peakHeap}MB heap`);
+    telEl.hidden  = parts.length===0;
+    telEl.textContent = parts.join(' · ');
+  }
+
   const errEl=$('ingestError');
   if(errEl){
     const err=job.error || job.meta?.error || '';
-    errEl.hidden = !(job.status==='failed' && err);
+    errEl.hidden      = !(job.status==='failed' && err);
     errEl.textContent = err ? `Reason: ${err}` : '';
   }
-  const bar=$('ingestBar'); if(bar) bar.style.width=pct+'%';
+  const bar=$('ingestBar');
+  if(bar){
+    bar.style.width      = pct+'%';
+    bar.style.background = job.status==='failed'?'#ff4d6d':job.status==='completed'?'#2dc653':'';
+  }
 }
 
 async function pollIngestionJob(jobId){

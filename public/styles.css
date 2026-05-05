@@ -196,3 +196,130 @@
 
 .ingest-error{margin-top:10px;padding:10px 12px;border:1px solid rgba(255,99,99,.35);background:rgba(255,99,99,.08);color:#ffb4b4;border-radius:12px;font-size:12px;line-height:1.4;word-break:break-word}
 body.light .ingest-error{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.25);color:#991b1b}
+
+/* ═══════════════════════════════════════════════════════
+   V21 — Turbo Upload + Deep Analytics Log Search Styles
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Log line v21 ─────────────────────────────────────── */
+.log-line.v21 {
+  padding: 8px 12px 8px 14px;
+  border-radius: 6px;
+  margin-bottom: 3px;
+  transition: background 0.15s;
+}
+.log-line.v21:hover { background: var(--surface-2, rgba(255,255,255,0.06)); }
+
+.log-meta.v21 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted, #9ca3af);
+  margin-bottom: 4px;
+}
+
+.log-ts { font-family: monospace; }
+.log-date { opacity: 0.65; font-size: 0.9em; }
+.log-svc { font-weight: 600; color: var(--text-primary, #e5e7eb); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-path { font-family: monospace; font-size: 0.85em; opacity: 0.8; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.log-message.v21 {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-secondary, #d1d5db);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-message.v21 mark {
+  background: rgba(251, 191, 36, 0.3);
+  color: #fbbf24;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* ── Method badges ─────────────────────────────────────── */
+.method-badge { padding: 1px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; font-family: monospace; }
+.meth-GET    { background: #2dc65322; color: #2dc653; }
+.meth-POST   { background: #4cc9f022; color: #4cc9f0; }
+.meth-PUT    { background: #f77f0022; color: #f77f00; }
+.meth-PATCH  { background: #a855f722; color: #a855f7; }
+.meth-DELETE { background: #ff4d6d22; color: #ff4d6d; }
+
+/* ── Analytics & latency badges ────────────────────────── */
+.latency-badge, .http-badge, .flow-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-family: monospace;
+}
+.flow-badge {
+  background: rgba(139,92,246,0.15);
+  color: #8b5cf6;
+  border: 1px solid rgba(139,92,246,0.3);
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 0.7rem;
+}
+
+/* ── Log analytics summary bar ─────────────────────────── */
+.log-analytics-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+  background: var(--surface-1, rgba(255,255,255,0.03));
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+}
+.lag-stat { display: flex; gap: 6px; flex-wrap: wrap; }
+.lag-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
+.lag-meta { font-size: 0.78rem; color: var(--text-muted, #9ca3af); }
+
+/* ── Ingest progress telemetry ─────────────────────────── */
+#ingestTelemetry {
+  font-size: 0.75rem;
+  color: var(--text-muted, #9ca3af);
+  font-family: monospace;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+}
+
+/* ── Log detail modal v21 ──────────────────────────────── */
+.modal-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--surface-1, rgba(255,255,255,0.03));
+  border-radius: 8px;
+}
+.modal-section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #9ca3af);
+  margin-bottom: 10px;
+}
+.analytics-section { border: 1px solid rgba(99,102,241,0.25); background: rgba(99,102,241,0.06); }
+.analytics-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.modal-pre {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 8px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.json-pre { color: #a5f3fc; }
+.copy-field { cursor: pointer; text-decoration: underline dotted; }
+.copy-field:hover { opacity: 0.8; }
