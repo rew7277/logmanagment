@@ -204,7 +204,20 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_masking_rules_env_enabled ON masking_rules(environment_id, enabled)`
+  `CREATE INDEX IF NOT EXISTS idx_masking_rules_env_enabled ON masking_rules(environment_id, enabled)`,
+  `ALTER TABLE masking_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+  `CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID REFERENCES environments(id) ON DELETE CASCADE,
+    actor TEXT DEFAULT 'system',
+    action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    before_value JSONB,
+    after_value JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_env_time ON audit_logs(environment_id, created_at DESC)`
 ];
 
 export async function migrate() {

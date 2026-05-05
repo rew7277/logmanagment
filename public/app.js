@@ -154,7 +154,7 @@ function openEndpointErrors(service,path){
   searchLogs(1);
 }
 
-async function initWorkspaces(){try{const ws=await api('/api/workspaces');state.workspace=ws[0]?.slug||state.workspace;const name=ws[0]?.name||'FSBL Production Ops';$('brandWorkspaceName')&&($('brandWorkspaceName').textContent=name);}catch{$('brandWorkspaceName')&&($('brandWorkspaceName').textContent='FSBL Production Ops');}}
+async function initWorkspaces(){try{const ws=await api('/api/workspaces');state.workspace=ws[0]?.slug||state.workspace;const name=ws[0]?.name||'FSBL Production Ops';$('brandWorkspaceName')&&($('brandWorkspaceName').textContent=name);await loadEnvironmentList();}catch{$('brandWorkspaceName')&&($('brandWorkspaceName').textContent='FSBL Production Ops');state.environments=['PROD','UAT','DEV','DR'];}}
 
 async function loadOverview(){
   try{
@@ -529,7 +529,7 @@ async function loadEnvironmentConfig(){
       ['Environment isolation', `Current scope: ${state.environment}. Analytics are not merged across environments.`]
     ].map(([k,v])=>`<div class="policy-item"><b>${esc(k)}</b><p>${esc(v)}</p></div>`).join('');
     const rules = cfg.masking_rules || [];
-    if($('maskingRuleList')) $('maskingRuleList').innerHTML = rules.map(r=>`<div class="policy-item"><b>${esc(r.field_name)}</b><p>${esc(r.pattern || 'Field-name based masking')} → ${esc(r.replacement || '[MASKED]')} · ${r.enabled?'enabled':'disabled'}</p></div>`).join('') || empty('No masking rules configured yet.');
+    if($('maskingRuleList')) $('maskingRuleList').innerHTML = rules.map(r=>`<div class="policy-item editable"><div><b>${esc(r.field_name)}</b><p>${esc(r.pattern || 'Field-name based masking')} → ${esc(r.replacement || '[MASKED]')} · ${r.enabled?'enabled':'disabled'}</p></div><div class="row-actions"><button class="mini-link edit-mask" data-id="${esc(r.id||r.field_name)}" data-field="${esc(r.field_name)}" data-pattern="${esc(r.pattern||'')}" data-replacement="${esc(r.replacement||'[MASKED]')}">Edit</button><button class="mini-link danger delete-mask" data-id="${esc(r.id||r.field_name)}">Delete</button></div></div>`).join('') || empty('No masking rules configured yet.'); $$('.edit-mask').forEach(b=>b.onclick=()=>{ if($('maskFieldName')) $('maskFieldName').value=b.dataset.field||''; if($('maskPattern')) $('maskPattern').value=b.dataset.pattern||''; if($('maskReplacement')) $('maskReplacement').value=b.dataset.replacement||'[MASKED]'; }); $$('.delete-mask').forEach(b=>b.onclick=()=>deleteMaskRule(b.dataset.id));
     const rca = cfg.rca || {};
     if($('aiProvider')) $('aiProvider').value = rca.provider || 'local';
     if($('aiModel')) $('aiModel').value = rca.model || '';
@@ -544,11 +544,24 @@ async function saveEnvironmentPolicy(){
   toast('Environment policy saved','success'); await loadEnvironmentConfig();
 }
 
+async function resetEnvironmentPolicy(){
+  if(!confirm(`Reset policy for ${state.environment} to defaults?`)) return;
+  await api(endpoint('/config/policy'),{method:'DELETE'});
+  toast('Environment policy reset','success'); await loadEnvironmentConfig();
+}
+
 async function saveMaskRule(){
   const field=$('maskFieldName')?.value?.trim(); if(!field) return toast('Enter business field name to mask','error');
-  const payload={ masking_rules:[{ field_name:field, pattern:$('maskPattern')?.value||null, replacement:$('maskReplacement')?.value||'[MASKED]', enabled:true }] };
-  await api(endpoint('/config'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const payload={ field_name:field, pattern:$('maskPattern')?.value||null, replacement:$('maskReplacement')?.value||'[MASKED]', enabled:true };
+  await api(endpoint('/masking-rules'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   toast('Masking rule saved','success'); ['maskFieldName','maskPattern','maskReplacement'].forEach(id=>$(id)&&($(id).value='')); await loadEnvironmentConfig();
+}
+
+async function deleteMaskRule(id){
+  if(!id) return;
+  if(!confirm('Delete this masking rule?')) return;
+  await api(endpoint(`/masking-rules/${encodeURIComponent(id)}`),{method:'DELETE'});
+  toast('Masking rule deleted','success'); await loadEnvironmentConfig();
 }
 
 async function saveAiProvider(){
@@ -557,11 +570,27 @@ async function saveAiProvider(){
   toast('AI RCA provider saved','success'); await loadEnvironmentConfig();
 }
 
+async function loadEnvironmentList(){
+  try{ const envs = await api(`/api/${state.workspace}/environments`); state.environments = (envs||[]).map(e=>e.name||e).filter(Boolean); }
+  catch{ state.environments=[...new Set(['PROD','UAT','DEV','DR',...getExtraEnvs()])]; }
+}
 async function createCustomEnvironment(){
   const name=$('newEnvironmentName')?.value?.trim(); if(!name) return toast('Enter environment name','error');
   await api(`/api/${state.workspace}/environments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-  localStorage.setItem('observex-extra-envs', JSON.stringify([...new Set([...getExtraEnvs(), name.toUpperCase().replace(/[^A-Z0-9_-]/g,'-')]) ]));
-  $('newEnvironmentName').value=''; toast('Environment added','success'); renderEnvButtons();
+  $('newEnvironmentName').value=''; toast('Environment added','success'); await loadEnvironmentList(); renderEnvButtons();
+}
+async function renameEnvironment(oldName){
+  const next=prompt('Environment name', oldName); if(!next || next.toUpperCase()===oldName) return;
+  const env=await api(`/api/${state.workspace}/environments/${encodeURIComponent(oldName)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:next})});
+  if(state.environment===oldName){state.environment=env.name||next.toUpperCase();localStorage.setItem('observex-env',state.environment);}
+  toast('Environment updated','success'); await loadEnvironmentList(); await refreshAll();
+}
+async function removeEnvironment(name){
+  if(name==='PROD') return toast('PROD cannot be deleted','error');
+  if(!confirm(`Delete environment ${name}? This removes its scoped logs, rules, alerts and policies.`)) return;
+  await api(`/api/${state.workspace}/environments/${encodeURIComponent(name)}`,{method:'DELETE'});
+  if(state.environment===name){state.environment='PROD';localStorage.setItem('observex-env','PROD');}
+  toast('Environment deleted','success'); await loadEnvironmentList(); await refreshAll();
 }
 function getExtraEnvs(){try{return JSON.parse(localStorage.getItem('observex-extra-envs')||'[]')}catch{return []}}
 
@@ -664,7 +693,7 @@ async function uploadBody(body,name='pasted logs'){
     await Promise.allSettled([loadUploadHistory(), loadOverview()]);}
 }
 
-function renderEnvButtons(){const host=$('envButtons'); if(!host) return; const envs=[...new Set(['PROD','UAT','DEV','DR',...getExtraEnvs()])]; host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item"><b>${esc(env)}</b><p>${env===state.environment?'Currently selected':'Available environment scope'}</p></div>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function renderEnvButtons(){const host=$('envButtons'); if(!host) return; const envs=[...new Set((state.environments&&state.environments.length?state.environments:['PROD','UAT','DEV','DR']).concat(getExtraEnvs()))]; host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected':'Available environment scope'}</p></div><div class="row-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join(''); $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env)); $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env)); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

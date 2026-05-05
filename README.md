@@ -109,3 +109,32 @@ This package now includes:
 - Improved RCA evidence summary based on selected environment logs.
 
 See `SAAS_AUDIT_AND_ROADMAP.md` for the full product/security/architecture checklist.
+
+## V29 configuration CRUD
+
+Runtime does not require `.md` files. Only this README is documentation.
+
+### AI RCA with OpenAI
+1. Create an API key at the OpenAI Platform API Keys page.
+2. Add these Railway variables:
+
+```env
+AI_PROVIDER=openai
+AI_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+```
+
+The browser never stores API keys. The server reads keys from environment variables only.
+
+### Editable/deletable admin settings
+The Ops page now supports workspace/environment scoped CRUD for:
+- Custom environments: create, rename, delete non-PROD environments.
+- Custom PII masking rules: create/update, edit, delete business-specific fields and regex patterns.
+- Environment policy: update/reset retention, rate limits, max upload and allowed sources.
+- RCA provider: local/OpenAI/Anthropic/Gemini per environment.
+
+After deploy, run:
+
+```bash
+npm run db:migrate
+```

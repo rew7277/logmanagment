@@ -21,7 +21,7 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -232,8 +232,20 @@ router.get('/workspaces', asyncHandler(async (_req, res) =>
 ));
 
 
+router.get('/:workspace/environments', asyncHandler(async (req, res) =>
+  res.json({ data: await listEnvironments(normalizeWorkspace(req)) })
+));
+
 router.post('/:workspace/environments', asyncHandler(async (req, res) =>
   res.status(201).json({ data: await createEnvironment(normalizeWorkspace(req), req.body || {}) })
+));
+
+router.put('/:workspace/environments/:envName', asyncHandler(async (req, res) =>
+  res.json({ data: await updateEnvironment(normalizeWorkspace(req), req.params.envName, req.body || {}) })
+));
+
+router.delete('/:workspace/environments/:envName', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteEnvironment(normalizeWorkspace(req), req.params.envName) })
 ));
 
 router.get('/:workspace/:environment/config', asyncHandler(async (req, res) =>
@@ -242,6 +254,22 @@ router.get('/:workspace/:environment/config', asyncHandler(async (req, res) =>
 
 router.put('/:workspace/:environment/config', asyncHandler(async (req, res) =>
   res.json({ data: await updateEnvironmentConfig(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+
+router.delete('/:workspace/:environment/config/policy', asyncHandler(async (req, res) =>
+  res.json({ data: await resetEnvironmentPolicy(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.post('/:workspace/:environment/masking-rules', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await upsertMaskingRule(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+
+router.put('/:workspace/:environment/masking-rules/:ruleId', asyncHandler(async (req, res) =>
+  res.json({ data: await upsertMaskingRule(normalizeWorkspace(req), normalizeEnvironment(req), { ...(req.body || {}), id: req.params.ruleId }) })
+));
+
+router.delete('/:workspace/:environment/masking-rules/:ruleId', asyncHandler(async (req, res) =>
+  res.json({ data: await deleteMaskingRule(normalizeWorkspace(req), normalizeEnvironment(req), req.params.ruleId) })
 ));
 
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {

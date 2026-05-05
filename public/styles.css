@@ -850,3 +850,7 @@ html.dark .json-pre { color: #a5f3fc !important; }
 .config-form.compact-config{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .config-form input,.config-form select{width:100%;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:12px;padding:10px 12px;font-size:13px;outline:none}
 .inline-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);padding:8px 0}.inline-check input{width:auto}.insight.warn{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+
+.policy-item.editable{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mini-link.danger,.secondary.danger{color:#ff7b8a;border-color:rgba(255,123,138,.35)}

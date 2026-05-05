@@ -10,7 +10,9 @@ const fallback = {
     { id: 'env-dr',   name: 'DR',   display_name: 'DR',   health_score: 0, status: 'observed' }
   ],
   logs: [],
-  ingestion: []
+  ingestion: [],
+  configs: new Map(),
+  maskingRules: new Map()
 };
 
 function envId(environmentName) { return `env-${String(environmentName || 'PROD').toLowerCase()}`; }
@@ -1322,7 +1324,11 @@ export async function getEnvironmentConfig(workspaceSlug, environmentName) {
     ],
     rca: { provider: process.env.AI_PROVIDER || 'local', model: process.env.AI_MODEL || 'local-rule-engine', enabled: Boolean(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY) }
   };
-  if (!env || !hasDatabase) return defaultConfig;
+  if (!env || !hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}`;
+    const customRules = fallback.maskingRules.get(key) || [];
+    return { ...defaultConfig, masking_rules: customRules.length ? customRules : defaultConfig.masking_rules };
+  }
   const [policy, masking, rcaCfg] = await Promise.all([
     query(`INSERT INTO environment_policies(environment_id) VALUES($1) ON CONFLICT(environment_id) DO NOTHING; SELECT * FROM environment_policies WHERE environment_id=$1`, [env.id]).catch(() => ({ rows: [] })),
     query(`SELECT id, field_name, pattern, replacement, enabled FROM masking_rules WHERE environment_id=$1 ORDER BY created_at ASC`, [env.id]).catch(() => ({ rows: [] })),
@@ -1344,13 +1350,7 @@ export async function updateEnvironmentConfig(workspaceSlug, environmentName, pa
       [env.id, Number(p.retention_days || 30), Boolean(p.archive_to_s3), Number(p.max_upload_mb || 750), Number(p.rate_limit_per_minute || 180), Number(p.ingest_rate_limit_per_minute || 30), p.allowed_ingestion_sources || ['UPLOAD','API','S3'], p.notes || null]);
   }
   if (Array.isArray(payload.masking_rules)) {
-    for (const r of payload.masking_rules) {
-      const name = String(r.field_name || '').trim(); if (!name) continue;
-      await query(`INSERT INTO masking_rules(environment_id, field_name, pattern, replacement, enabled)
-        VALUES($1,$2,$3,$4,$5)
-        ON CONFLICT(environment_id, field_name) DO UPDATE SET pattern=EXCLUDED.pattern, replacement=EXCLUDED.replacement, enabled=EXCLUDED.enabled`,
-        [env.id, name, r.pattern || null, r.replacement || '[MASKED]', r.enabled !== false]);
-    }
+    for (const r of payload.masking_rules) await upsertMaskingRule(workspaceSlug, environmentName, r);
   }
   if (payload.rca) {
     await query(`INSERT INTO rca_settings(environment_id, provider, model, enabled) VALUES($1,$2,$3,$4)
@@ -1360,10 +1360,98 @@ export async function updateEnvironmentConfig(workspaceSlug, environmentName, pa
   return getEnvironmentConfig(workspaceSlug, environmentName);
 }
 
+export async function listEnvironments(workspaceSlug='fsbl-prod-ops') {
+  if (!hasDatabase) return fallback.environments;
+  await ensureWorkspaceEnvironment(workspaceSlug, 'PROD');
+  const result = await query(`SELECT e.id, e.name, e.display_name, e.status, e.health_score, e.created_at
+    FROM environments e JOIN workspaces w ON w.id=e.workspace_id
+    WHERE w.slug=$1 ORDER BY e.name='PROD' DESC, e.name='UAT' DESC, e.name ASC`, [workspaceSlug]);
+  return result.rows;
+}
+
 export async function createEnvironment(workspaceSlug, payload = {}) {
   const name = String(payload.name || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '-').slice(0, 40);
   if (!name) throw new Error('Environment name is required');
+  if (!hasDatabase) {
+    const existing = fallback.environments.find(e => e.name === name);
+    if (existing) return existing;
+    const env = { id: envId(name), name, display_name: payload.display_name || name, health_score: 0, status: 'observed', custom: true };
+    fallback.environments.push(env);
+    return env;
+  }
   const env = await ensureWorkspaceEnvironment(workspaceSlug, name);
-  if (payload.display_name && hasDatabase) await query(`UPDATE environments SET display_name=$1 WHERE id=$2`, [String(payload.display_name).slice(0,80), env.id]);
+  await query(`UPDATE environments SET display_name=$1, status=$2 WHERE id=$3`, [String(payload.display_name || name).slice(0,80), String(payload.status || env.status || 'observed').slice(0,40), env.id]);
   return getEnvironment(workspaceSlug, name);
+}
+
+export async function updateEnvironment(workspaceSlug, environmentName, payload = {}) {
+  const name = String(environmentName || '').trim().toUpperCase();
+  const nextName = String(payload.name || name).trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '-').slice(0, 40);
+  if (!nextName) throw new Error('Environment name is required');
+  if (!hasDatabase) {
+    const env = fallback.environments.find(e => e.name === name);
+    if (!env) throw new Error('Environment not found');
+    env.name = nextName; env.display_name = payload.display_name || nextName; env.status = payload.status || env.status || 'observed';
+    return env;
+  }
+  const env = await getEnvironment(workspaceSlug, name);
+  await query(`UPDATE environments SET name=$1, display_name=$2, status=$3 WHERE id=$4 RETURNING *`, [nextName, String(payload.display_name || nextName).slice(0,80), String(payload.status || env.status || 'observed').slice(0,40), env.id]);
+  return getEnvironment(workspaceSlug, nextName);
+}
+
+export async function deleteEnvironment(workspaceSlug, environmentName) {
+  const name = String(environmentName || '').trim().toUpperCase();
+  if (['PROD'].includes(name)) throw new Error('PROD cannot be deleted. Rename or clear data instead.');
+  if (!hasDatabase) {
+    const before = fallback.environments.length;
+    fallback.environments = fallback.environments.filter(e => e.name !== name);
+    return { deleted: before - fallback.environments.length, environment: name };
+  }
+  const env = await getEnvironment(workspaceSlug, name);
+  const result = await query(`DELETE FROM environments WHERE id=$1 RETURNING id`, [env.id]);
+  return { deleted: result.rowCount || 0, environment: name };
+}
+
+export async function upsertMaskingRule(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const field = String(payload.field_name || payload.name || '').trim();
+  if (!field) throw new Error('Masking rule field_name is required');
+  if (!hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.maskingRules.get(key) || [];
+    const existing = list.find(r => r.field_name === field);
+    const rule = { id: existing?.id || `mask-${Date.now()}`, field_name: field, pattern: payload.pattern || null, replacement: payload.replacement || '[MASKED]', enabled: payload.enabled !== false };
+    if (existing) Object.assign(existing, rule); else list.push(rule);
+    fallback.maskingRules.set(key, list);
+    return rule;
+  }
+  const result = await query(`INSERT INTO masking_rules(environment_id, field_name, pattern, replacement, enabled)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(environment_id, field_name) DO UPDATE SET pattern=EXCLUDED.pattern, replacement=EXCLUDED.replacement, enabled=EXCLUDED.enabled
+    RETURNING id, field_name, pattern, replacement, enabled`,
+    [env.id, field, payload.pattern || null, payload.replacement || '[MASKED]', payload.enabled !== false]);
+  return result.rows[0];
+}
+
+export async function deleteMaskingRule(workspaceSlug, environmentName, ruleIdOrField) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  const keyVal = String(ruleIdOrField || '').trim();
+  if (!keyVal) throw new Error('Masking rule id or field is required');
+  if (!hasDatabase) {
+    const key = `${workspaceSlug}:${environmentName}`;
+    const list = fallback.maskingRules.get(key) || [];
+    const next = list.filter(r => r.id !== keyVal && r.field_name !== keyVal);
+    fallback.maskingRules.set(key, next);
+    return { deleted: list.length - next.length };
+  }
+  const result = await query(`DELETE FROM masking_rules WHERE environment_id=$1 AND (id::text=$2 OR field_name=$2) RETURNING id`, [env.id, keyVal]);
+  return { deleted: result.rowCount || 0 };
+}
+
+export async function resetEnvironmentPolicy(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return null;
+  if (!hasDatabase) return { reset: true, local_only: true };
+  await query(`DELETE FROM environment_policies WHERE environment_id=$1`, [env.id]);
+  return getEnvironmentConfig(workspaceSlug, environmentName);
 }
