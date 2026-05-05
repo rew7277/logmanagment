@@ -56,6 +56,8 @@ function setPage(page){
   if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
   if(state.page==='apis')    { loadApisEndpoints(); }
   if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
+  if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
+  if(state.page==='ops') { loadAlertsOps(); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -454,7 +456,65 @@ async function deleteAllUploads(){
   }catch(e){toast(e.message,'error');}
 }
 
-async function loadAlertsOps(){try{const a=await api(endpoint('/alerts'));$('alertList').innerHTML=a.length?a.map(x=>`<div class="row"><div><strong>${esc(x.title)}</strong><small>${esc(x.description||'')}</small></div><div><small>Severity</small><b>${esc(x.severity)}</b></div><div><small>Status</small><b>${esc(x.status)}</b></div><div><small>Service</small><b>${esc(x.service_name||'-')}</b></div><div><small>Created</small><b>${new Date(x.created_at).toLocaleDateString()}</b></div></div>`).join(''):empty('No active alerts.');const o=await api(endpoint('/ops'));$('deploymentList').innerHTML=(o.deployments||[]).map(x=>`<div class="insight"><b>${esc(x.version)}</b><p>${esc(x.notes||'')}</p></div>`).join('')||empty('No deployments');$('ingestionList').innerHTML=(o.ingestion||o.ingestion_jobs||[]).map(x=>`<div class="insight"><b>${esc(x.source_type)} · ${esc(x.source_name)}</b><p>${fmt(x.accepted_count)} accepted / ${fmt(x.rejected_count)} rejected</p></div>`).join('')||empty('No ingestion jobs');$('securityList').innerHTML=(o.security||o.security_events||[]).map(x=>`<div class="insight"><b>${esc(x.event_type)}</b><p>${esc(x.message)} (${fmt(x.count)})</p></div>`).join('')||empty('No security events');}catch(e){}}
+async function loadAlertRules(){
+  const host=$('alertRules'); if(!host) return;
+  try{
+    const rows=await api(endpoint('/alert-rules'));
+    host.innerHTML=rows.map(r=>`<div class="rule-item ${r.builtin?'builtin':''}"><div><b>${esc(r.name)}</b><small>${esc(r.description||`${r.metric} ${r.operator} ${r.threshold}`)}</small></div><span class="severity-pill ${esc(r.severity)}">${esc(r.severity)}</span><code>${esc(r.metric)} ${esc(r.operator)} ${esc(r.threshold)}</code></div>`).join('')||empty('No rules configured');
+  }catch(e){host.innerHTML=empty('Alert rules unavailable');}
+}
+
+async function createCustomRule(){
+  const payload={
+    name:$('ruleName')?.value||'', metric:$('ruleMetric')?.value||'error_rate_pct', operator:$('ruleOperator')?.value||'>',
+    threshold:Number($('ruleThreshold')?.value||1), severity:$('ruleSeverity')?.value||'P2',
+    service_name:$('ruleService')?.value||'', window_minutes:Number($('ruleWindow')?.value||15)
+  };
+  if(!payload.name.trim()) return toast('Enter alert rule name','error');
+  try{await api(endpoint('/alert-rules'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('Custom alert rule created','success');$('ruleName').value='';await loadAlertRules();}
+  catch(e){toast(e.message,'error');}
+}
+
+async function evaluateAlertsNow(){
+  try{const res=await api(endpoint('/alerts/evaluate'),{method:'POST'});toast(res.created?`Created ${res.created} alert(s)`:`Checked ${res.checked || 0} signals. No new alert.`,'success');await Promise.allSettled([loadAlertsOps(),loadOverview()]);}
+  catch(e){toast(e.message,'error');}
+}
+
+function alertCard(x){
+  const sev=x.severity||'INFO';
+  const value=x.current_value!==null&&x.current_value!==undefined?`<span>${esc(x.metric||'metric')}: <b>${Number(x.current_value).toFixed(2)}</b> / ${esc(x.threshold??'-')}</span>`:'';
+  const service=x.service_name||x.path||'Environment';
+  return `<div class="incident-card ${esc(sev)}"><div class="incident-main"><span class="severity-pill ${esc(sev)}">${esc(sev)}</span><div><b>${esc(x.title)}</b><p>${esc(x.description||'')}</p><small>${esc(service)} · ${new Date(x.created_at).toLocaleString()}</small></div></div><div class="incident-meta">${value}<button class="mini-link" data-alert-filter="${esc(x.service_name||'')}">Investigate →</button></div></div>`;
+}
+
+async function loadAlertsOps(){try{
+  const [a,o]=await Promise.all([api(endpoint('/alerts')),api(endpoint('/ops')).catch(()=>({}))]);
+  if($('alertKpis')){
+    const p1=a.filter(x=>x.severity==='P1').length,p2=a.filter(x=>x.severity==='P2').length,open=a.filter(x=>x.status==='open').length;
+    $('alertKpis').innerHTML=[['Open',open],['P1 Critical',p1],['P2 High',p2],['Environment',state.environment]].map(([k,v])=>`<div><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
+  }
+  if($('alertList')) $('alertList').innerHTML=a.length?a.map(alertCard).join(''):empty('No active alerts. Use “Evaluate now” or create custom alert rules.');
+  $$('.incident-meta [data-alert-filter]').forEach(b=>b.onclick=()=>{setPage('logs');$('serviceFilter').value=b.dataset.alertFilter||'';refreshPathFilter();$('severityFilter').value='ERROR';$('quickTime').value='24h';searchLogs(1);});
+
+  const deployments=o.deployments||[];
+  if($('deploymentList')) $('deploymentList').innerHTML=deployments.length?deployments.map(x=>`<div class="ops-row"><div><b>${esc(x.version||x.source_name||'Upload / release')}</b><small>${esc(x.service_name||'Environment')} · ${new Date(x.deployed_at||x.created_at||Date.now()).toLocaleString()}</small></div><div><small>Before</small><b>${fmtPct(x.before_error_rate)}</b></div><div><small>After</small><b>${fmtPct(x.after_error_rate)}</b></div><p>${esc(x.notes||'Track release risk by comparing error rate and latency before/after deployment.')}</p></div>`).join(''):empty('No deployment records yet. Upload impact appears under Upload History after logs are available.');
+
+  const ingestion=o.ingestion||o.ingestion_jobs||[];
+  if($('ingestionList')) $('ingestionList').innerHTML=ingestion.length?ingestion.map(x=>{const bad=Number(x.rejected_count||0)+Number(x.parser_errors||0);return `<div class="ops-row ${bad?'warn':''}"><div><b>${esc(x.source_type)} · ${esc(x.source_name)}</b><small>${esc(x.status||'observed')} · ${x.last_received_at?new Date(x.last_received_at).toLocaleString():new Date(x.created_at||Date.now()).toLocaleString()}</small></div><div><small>Accepted</small><b>${fmt(x.accepted_count)}</b></div><div><small>Rejected</small><b>${fmt(x.rejected_count)}</b></div><p>${bad?'Parser rejects detected. Review parser rules or source format.':'Ingestion healthy for this source.'}</p></div>`;}).join(''):empty('No ingestion jobs yet. Configure S3, API ingestion, or upload a log file.');
+
+  const security=o.security||o.security_events||[];
+  if($('securityList')) $('securityList').innerHTML=(security.length?security:[{event_type:'PII masking policy',message:'Mask passwords, tokens, authorization headers, Aadhaar/PAN-like identifiers before indexing.',severity:'INFO',count:0},{event_type:'Header hygiene',message:'Store only required headers; redact cookies and secrets by default.',severity:'INFO',count:0}]).map(x=>`<div class="ops-row"><div><b>${esc(x.event_type)}</b><small>${esc(x.severity||'INFO')}</small></div><p>${esc(x.message)} ${x.count?`· ${fmt(x.count)} events`:''}</p></div>`).join('');
+
+  if($('policyList')) $('policyList').innerHTML=[
+    ['Retention','Keep PROD logs 30–90 days; archive raw files to S3 if needed.'],['Environment isolation','Never merge PROD/UAT/DEV analytics unless using compare screen.'],['Webhook routing','Send P1/P2 alerts to Slack/Teams using POST_ALERT_WEBHOOK_URL.'],['RBAC','Only admins can delete logs or change alert/security policies.']
+  ].map(([k,v])=>`<div class="policy-item"><b>${k}</b><p>${v}</p></div>`).join('');
+
+  const prompts=['Why did error rate increase in last 24 hours?','Show top failing endpoint and likely Mule flow root cause.','Compare latest upload with previous logs and explain regression.','Find security/masking issues in recent ERROR logs.'];
+  if($('rcaPromptList')) $('rcaPromptList').innerHTML=prompts.map(p=>`<button class="prompt-chip">${esc(p)}</button>`).join('');
+  if($('rcaQuickPrompts')) $('rcaQuickPrompts').innerHTML=prompts.map(p=>`<button class="prompt-chip">${esc(p)}</button>`).join('');
+  $$('.prompt-chip').forEach(b=>b.onclick=()=>{setPage('rca');$('rcaQuery').value=b.textContent;runRca();});
+}catch(e){console.warn(e);}}
+
 async function runRca(){setPage('rca');const query=$('rcaQuery').value||'Analyze current environment issues';const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});$('rcaContent').innerHTML=`<div class="insight"><h4>${esc(data.likely_root_cause||'Environment RCA')}</h4><p>${esc(data.summary||'No summary')}</p></div>${(data.recommended_actions||data.recommendations||[]).map(r=>`<div class="insight"><b>Action</b><p>${esc(r)}</p></div>`).join('')}`;}
 
 async function clearUploadedLogs(){
@@ -555,6 +615,6 @@ async function uploadBody(body,name='pasted logs'){
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

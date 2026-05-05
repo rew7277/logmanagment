@@ -140,7 +140,31 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(environment_id, name)
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_saved_search_env ON saved_searches(environment_id, created_at DESC)`
+  `CREATE INDEX IF NOT EXISTS idx_saved_search_env ON saved_searches(environment_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS alert_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    operator TEXT NOT NULL DEFAULT '>',
+    threshold NUMERIC(12,3) NOT NULL,
+    severity TEXT NOT NULL CHECK (severity IN ('INFO','P3','P2','P1')) DEFAULT 'P2',
+    service_name TEXT,
+    endpoint_path TEXT,
+    window_minutes INTEGER NOT NULL DEFAULT 15,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    notify_webhook BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_alert_rules_env_enabled ON alert_rules(environment_id, enabled)`,
+  `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id UUID REFERENCES alert_rules(id) ON DELETE SET NULL`,
+  `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS metric TEXT`,
+  `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS current_value NUMERIC(12,3)`,
+  `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS threshold NUMERIC(12,3)`,
+  `ALTER TABLE alerts ADD COLUMN IF NOT EXISTS fingerprint TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_env_fingerprint_open ON alerts(environment_id, fingerprint) WHERE status='open' AND fingerprint IS NOT NULL`
+
 ];
 
 export async function migrate() {

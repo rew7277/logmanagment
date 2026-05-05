@@ -20,7 +20,8 @@ import {
   deleteEnvironmentLogs, deleteUploadHistory, getAlerts, getEndpoints,
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
-  getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch
+  getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
+  getAlertRules, createAlertRule, evaluateAlertRules
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -278,6 +279,21 @@ router.get('/:workspace/:environment/deploy-impact', asyncHandler(async (req, re
 router.get('/:workspace/:environment/alerts',  asyncHandler(async (req, res) =>
   res.json({ data: await getAlerts(normalizeWorkspace(req), normalizeEnvironment(req)) })
 ));
+
+
+router.get('/:workspace/:environment/alert-rules', asyncHandler(async (req, res) =>
+  res.json({ data: await getAlertRules(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.post('/:workspace/:environment/alert-rules', asyncHandler(async (req, res) =>
+  res.status(201).json({ data: await createAlertRule(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
+));
+
+router.post('/:workspace/:environment/alerts/evaluate', asyncHandler(async (req, res) => {
+  const data = await evaluateAlertRules(normalizeWorkspace(req), normalizeEnvironment(req));
+  await postAlertWebhook(normalizeWorkspace(req), normalizeEnvironment(req), data.alerts || []);
+  res.json({ data });
+}));
 
 router.post('/:workspace/:environment/anomalies/run', asyncHandler(async (req, res) => {
   const data = await runAnomalyDetection(normalizeWorkspace(req), normalizeEnvironment(req));

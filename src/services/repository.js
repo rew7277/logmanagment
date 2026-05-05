@@ -939,9 +939,7 @@ export async function getAlerts(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) return [];
   const result = await query(
-    `SELECT a.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path,
-              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END, CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END, 0) AS latency_ms,
-              COALESCE(le.raw->>'http_status', le.raw->'analytics'->>'http_status') AS http_status
+    `SELECT a.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
      FROM alerts a
      LEFT JOIN services s ON s.id=a.service_id
      LEFT JOIN endpoints ep ON ep.id=a.endpoint_id
@@ -1073,4 +1071,143 @@ export async function rca(workspaceSlug, environmentName, queryText = '') {
       'Do not compare or merge logs from other environments unless using an explicit compare screen.'
     ]
   };
+}
+
+
+const builtinAlertTemplates = [
+  { key:'error-rate-critical', name:'Critical error-rate spike', metric:'error_rate_pct', operator:'>', threshold:5, severity:'P1', window_minutes:15, description:'Triggers when ERROR/FATAL logs cross 5% for any service.' },
+  { key:'error-rate-warning', name:'Error-rate warning', metric:'error_rate_pct', operator:'>', threshold:1, severity:'P2', window_minutes:15, description:'Early warning when a service error rate crosses 1%.' },
+  { key:'latency-p95-high', name:'High P95 latency', metric:'p95_latency_ms', operator:'>', threshold:1500, severity:'P2', window_minutes:15, description:'Triggers when endpoint/service P95 latency is higher than expected.' },
+  { key:'no-logs', name:'No logs received', metric:'no_logs_minutes', operator:'>', threshold:30, severity:'P2', window_minutes:30, description:'Detects silent services or broken ingestion when no logs arrive.' },
+  { key:'ingestion-rejects', name:'Parser rejection spike', metric:'rejected_rate_pct', operator:'>', threshold:2, severity:'P2', window_minutes:60, description:'Upload/API/S3 parser is rejecting too many rows.' },
+  { key:'fatal-events', name:'Fatal events present', metric:'fatal_count', operator:'>', threshold:0, severity:'P1', window_minutes:15, description:'Any FATAL event in the selected environment.' },
+  { key:'security-mask', name:'Security masking coverage low', metric:'masking_coverage_pct', operator:'<', threshold:95, severity:'P2', window_minutes:60, description:'PII/token masking coverage below policy threshold.' }
+];
+
+export async function getAlertRules(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return [];
+  const builtins = builtinAlertTemplates.map((r) => ({ ...r, id: `builtin-${r.key}`, builtin: true, enabled: true, service_name: null, endpoint_path: null }));
+  if (!hasDatabase) return builtins;
+  const result = await query(
+    `SELECT id, name, metric, operator, threshold, severity, service_name, endpoint_path, window_minutes, enabled, notify_webhook, created_at
+     FROM alert_rules WHERE environment_id=$1 ORDER BY created_at DESC`, [env.id]
+  );
+  return [...result.rows.map(r => ({...r, builtin:false})), ...builtins];
+}
+
+export async function createAlertRule(workspaceSlug, environmentName, payload = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return null;
+  const name = String(payload.name || 'Custom alert').trim().slice(0, 120);
+  const metric = String(payload.metric || 'error_rate_pct');
+  const operator = ['>','<','>=','<=','='].includes(payload.operator) ? payload.operator : '>';
+  const severity = ['INFO','P3','P2','P1'].includes(payload.severity) ? payload.severity : 'P2';
+  const threshold = Number(payload.threshold ?? 1);
+  const window_minutes = Math.max(1, Math.min(1440, Number(payload.window_minutes || 15)));
+  const service_name = payload.service_name ? String(payload.service_name).slice(0,160) : null;
+  const endpoint_path = payload.endpoint_path ? String(payload.endpoint_path).slice(0,300) : null;
+  if (!hasDatabase) return { id:`local-rule-${Date.now()}`, name, metric, operator, threshold, severity, window_minutes, service_name, endpoint_path, enabled:true };
+  const result = await query(
+    `INSERT INTO alert_rules(environment_id, name, metric, operator, threshold, severity, service_name, endpoint_path, window_minutes, enabled, notify_webhook)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true,true)
+     ON CONFLICT(environment_id, name) DO UPDATE SET metric=EXCLUDED.metric, operator=EXCLUDED.operator, threshold=EXCLUDED.threshold,
+       severity=EXCLUDED.severity, service_name=EXCLUDED.service_name, endpoint_path=EXCLUDED.endpoint_path,
+       window_minutes=EXCLUDED.window_minutes, enabled=true
+     RETURNING *`, [env.id, name, metric, operator, threshold, severity, service_name, endpoint_path, window_minutes]
+  );
+  return result.rows[0];
+}
+
+function compareMetric(value, operator, threshold) {
+  const v = Number(value || 0), t = Number(threshold || 0);
+  if (operator === '<') return v < t;
+  if (operator === '>=') return v >= t;
+  if (operator === '<=') return v <= t;
+  if (operator === '=') return v === t;
+  return v > t;
+}
+
+async function computeRuleCandidates(env, rule) {
+  const serviceClause = rule.service_name ? ` AND s.name=$3` : '';
+  const params = [env.id, Number(rule.window_minutes || 15)];
+  if (rule.service_name) params.push(rule.service_name);
+  if (rule.metric === 'error_rate_pct') {
+    const r = await query(`SELECT s.id service_id, s.name service_name, NULL::uuid endpoint_id, count(*)::int total,
+        count(*) FILTER (WHERE le.severity IN ('ERROR','FATAL'))::int bad,
+        COALESCE(100.0 * count(*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(12,3) value
+      FROM services s JOIN log_events le ON le.service_id=s.id
+      WHERE s.environment_id=$1 AND le.timestamp >= now() - ($2 || ' minutes')::interval ${serviceClause}
+      GROUP BY s.id, s.name HAVING count(*) > 0`, params);
+    return r.rows;
+  }
+  if (rule.metric === 'fatal_count') {
+    const r = await query(`SELECT s.id service_id, s.name service_name, NULL::uuid endpoint_id, count(*)::numeric(12,3) value
+      FROM services s JOIN log_events le ON le.service_id=s.id
+      WHERE s.environment_id=$1 AND le.severity='FATAL' AND le.timestamp >= now() - ($2 || ' minutes')::interval ${serviceClause}
+      GROUP BY s.id, s.name`, params);
+    return r.rows;
+  }
+  if (rule.metric === 'p95_latency_ms') {
+    const r = await query(`SELECT s.id service_id, s.name service_name, NULL::uuid endpoint_id,
+        COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::numeric(12,3) value
+      FROM services s JOIN traces t ON t.service_id=s.id
+      WHERE s.environment_id=$1 AND t.started_at >= now() - ($2 || ' minutes')::interval ${serviceClause}
+      GROUP BY s.id, s.name`, params);
+    return r.rows;
+  }
+  if (rule.metric === 'no_logs_minutes') {
+    const r = await query(`SELECT s.id service_id, s.name service_name, NULL::uuid endpoint_id,
+        EXTRACT(EPOCH FROM (now() - MAX(le.timestamp))) / 60.0 AS value
+      FROM services s LEFT JOIN log_events le ON le.service_id=s.id
+      WHERE s.environment_id=$1 ${rule.service_name ? 'AND s.name=$2' : ''}
+      GROUP BY s.id, s.name`, rule.service_name ? [env.id, rule.service_name] : [env.id]);
+    return r.rows;
+  }
+  if (rule.metric === 'rejected_rate_pct') {
+    const r = await query(`SELECT NULL::uuid service_id, source_name service_name, NULL::uuid endpoint_id,
+        COALESCE(100.0 * rejected_count / NULLIF(accepted_count + rejected_count,0),0)::numeric(12,3) value
+      FROM ingestion_jobs WHERE environment_id=$1 AND created_at >= now() - ($2 || ' minutes')::interval`, [env.id, Number(rule.window_minutes || 60)]);
+    return r.rows;
+  }
+  if (rule.metric === 'masking_coverage_pct') {
+    const r = await query(`SELECT NULL::uuid service_id, 'Security policy'::text service_name, NULL::uuid endpoint_id,
+        COALESCE(100.0 - LEAST(100, count(*) FILTER (WHERE message ~* '(password|secret|token|authorization|apikey)') * 5),100)::numeric(12,3) value
+      FROM log_events WHERE environment_id=$1 AND timestamp >= now() - ($2 || ' minutes')::interval`, [env.id, Number(rule.window_minutes || 60)]);
+    return r.rows;
+  }
+  return [];
+}
+
+export async function evaluateAlertRules(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env || !hasDatabase) return { checked:0, created:0, alerts:[] };
+  const customRules = await query(`SELECT * FROM alert_rules WHERE environment_id=$1 AND enabled=true`, [env.id]);
+  const rules = customRules.rows.length ? customRules.rows : builtinAlertTemplates.map(r => ({...r, id:null, enabled:true}));
+  const created=[]; let checked=0;
+  for (const rule of rules) {
+    const candidates = await computeRuleCandidates(env, rule);
+    for (const c of candidates) {
+      checked++;
+      if (!compareMetric(c.value, rule.operator, rule.threshold)) continue;
+      const scope = c.service_name || rule.service_name || 'environment';
+      const fp = `${rule.name}|${rule.metric}|${scope}|${rule.operator}|${rule.threshold}`.toLowerCase();
+      const description = `${scope}: ${rule.metric} is ${Number(c.value||0).toFixed(2)} ${rule.operator} ${Number(rule.threshold).toFixed(2)} during last ${rule.window_minutes || 15} minutes.`;
+      const result = await query(
+        `INSERT INTO alerts(environment_id, service_id, endpoint_id, rule_id, severity, title, description, status, metric, current_value, threshold, fingerprint)
+         VALUES($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11)
+         ON CONFLICT ON CONSTRAINT idx_alerts_env_fingerprint_open DO NOTHING
+         RETURNING *`, [env.id, c.service_id || null, c.endpoint_id || null, rule.id || null, rule.severity || 'P2', rule.name, description, rule.metric, Number(c.value||0), Number(rule.threshold), fp]
+      ).catch(async () => {
+        return await query(
+          `INSERT INTO alerts(environment_id, service_id, endpoint_id, rule_id, severity, title, description, status, metric, current_value, threshold, fingerprint)
+           SELECT $1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11
+           WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE environment_id=$1 AND fingerprint=$11 AND status='open') RETURNING *`,
+          [env.id, c.service_id || null, c.endpoint_id || null, rule.id || null, rule.severity || 'P2', rule.name, description, rule.metric, Number(c.value||0), Number(rule.threshold), fp]
+        );
+      });
+      if (result.rows[0]) created.push(result.rows[0]);
+    }
+  }
+  return { checked, created: created.length, alerts: created };
 }
