@@ -31,6 +31,12 @@ import { rateLimit }        from '../middleware/rateLimit.js';
 import { parseUploadText, isNewLogStart, parseLogBlock, createStreamingParser } from '../services/logParser.js';
 
 const router = express.Router();
+
+// Must be declared before any route uses it.
+// In ESM, const/function expressions are not hoisted; using asyncHandler before
+// this line crashes Railway at startup with "Cannot access 'asyncHandler' before initialization".
+const asyncHandler = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 router.use(rateLimit({ maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), windowMs: 60_000 }));
 const ingestLimit = rateLimit({ maxRequests: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), windowMs: 60_000 });
 
@@ -303,7 +309,6 @@ async function processUploadedFile(job, filePath, workspace, environment) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-const asyncHandler          = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const normalizeEnvironment  = req => String(req.params.environment || req.query.environment || 'PROD').toUpperCase();
 const normalizeWorkspace    = req => String(req.params.workspace   || req.query.workspace   || 'fsbl-prod-ops');
 
