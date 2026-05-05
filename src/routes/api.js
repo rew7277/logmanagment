@@ -19,7 +19,7 @@ import {
   bulkCreateLogs, createUploadRecord, deleteAllUploadHistory,
   deleteEnvironmentLogs, deleteUploadHistory, getAlerts, getEndpoints,
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
-  getWorkspaces, rca, updateUploadRecord
+  getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
@@ -39,6 +39,20 @@ function adaptiveBatchSize() {
   if (pct > 0.85) return Math.max(500, Math.floor(BASE_BATCH_SIZE * 0.4));
   if (pct > 0.65) return Math.max(1000, Math.floor(BASE_BATCH_SIZE * 0.7));
   return BASE_BATCH_SIZE;
+}
+
+async function postAlertWebhook(workspace, environment, alerts = []) {
+  const url = process.env.POST_ALERT_WEBHOOK_URL;
+  if (!url || !alerts.length) return;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace, environment, alerts, source: 'ObserveX' })
+    });
+  } catch (error) {
+    console.warn('[alert-webhook] failed', error.message);
+  }
 }
 
 // ─── In-process Job Store ────────────────────────────────────────────────────
@@ -185,6 +199,8 @@ async function processUploadedFile(job, filePath, workspace, environment) {
       }
     });
     updateJob(job, { status: 'completed', stage: 'Completed' });
+    const anomaly = await runAnomalyDetection(workspace, environment).catch(() => null);
+    if (anomaly?.alerts?.length) await postAlertWebhook(workspace, environment, anomaly.alerts);
 
   } catch (err) {
     const errMsg = `${err.message || String(err)}`;
@@ -223,7 +239,7 @@ router.get('/:workspace/:environment/services', asyncHandler(async (req, res) =>
 ));
 
 router.get('/:workspace/:environment/endpoints', asyncHandler(async (req, res) =>
-  res.json({ data: await getEndpoints(normalizeWorkspace(req), normalizeEnvironment(req)) })
+  res.json({ data: await getEndpoints(normalizeWorkspace(req), normalizeEnvironment(req), req.query.service || '') })
 ));
 
 router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
@@ -247,6 +263,22 @@ router.get('/:workspace/:environment/traces',  asyncHandler(async (req, res) =>
 router.get('/:workspace/:environment/alerts',  asyncHandler(async (req, res) =>
   res.json({ data: await getAlerts(normalizeWorkspace(req), normalizeEnvironment(req)) })
 ));
+
+router.post('/:workspace/:environment/anomalies/run', asyncHandler(async (req, res) => {
+  const data = await runAnomalyDetection(normalizeWorkspace(req), normalizeEnvironment(req));
+  await postAlertWebhook(normalizeWorkspace(req), normalizeEnvironment(req), data.alerts || []);
+  res.json({ data });
+}));
+
+router.get('/:workspace/:environment/saved-searches', asyncHandler(async (req, res) =>
+  res.json({ data: await getSavedSearches(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.post('/:workspace/:environment/saved-searches', asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 80);
+  if (!name) return res.status(400).json({ error: 'Saved search name is required' });
+  res.status(201).json({ data: await createSavedSearch(normalizeWorkspace(req), normalizeEnvironment(req), name, req.body?.filters || {}) });
+}));
 router.get('/:workspace/:environment/ops',     asyncHandler(async (req, res) =>
   res.json({ data: await getOps(normalizeWorkspace(req), normalizeEnvironment(req)) })
 ));
@@ -403,7 +435,10 @@ router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(as
     parser_errors: 0, meta: { bytes, stage: 'Completed' }
   }).catch(() => {});
 
-  res.status(201).json({ inserted, parsed, rejected, bytes, upload_id: uploadRecord?.id, parser: 'mule+generic' });
+  const anomaly = await runAnomalyDetection(normalizeWorkspace(req), normalizeEnvironment(req)).catch(() => null);
+  if (anomaly?.alerts?.length) await postAlertWebhook(normalizeWorkspace(req), normalizeEnvironment(req), anomaly.alerts);
+
+  res.status(201).json({ inserted, parsed, rejected, bytes, upload_id: uploadRecord?.id, parser: 'mule+generic', anomaly });
 }));
 
 export default router;

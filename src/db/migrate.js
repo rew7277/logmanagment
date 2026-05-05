@@ -131,7 +131,16 @@ const statements = [
     count INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_security_env_time ON security_events(environment_id, created_at DESC)`
+  `CREATE INDEX IF NOT EXISTS idx_security_env_time ON security_events(environment_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS saved_searches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(environment_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_saved_search_env ON saved_searches(environment_id, created_at DESC)`
 ];
 
 export async function migrate() {

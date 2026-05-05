@@ -748,3 +748,25 @@ html.dark .json-pre { color: #a5f3fc !important; }
   .ep-inner-row span:nth-child(5),
   .ep-inner-row span:nth-child(6) { display: none; }
 }
+
+/* V24: premium endpoint workflow + saved investigations */
+.api-acc-stat.trend { min-width: 92px; }
+.spark-bars { display:inline-flex; align-items:flex-end; gap:3px; height:24px; padding:3px 6px; border-radius:999px; background:rgba(51,92,255,.07); border:1px solid rgba(51,92,255,.12); }
+.spark-bars i { display:block; width:5px; min-height:3px; border-radius:999px 999px 2px 2px; background:linear-gradient(180deg, rgba(51,92,255,.95), rgba(119,72,255,.45)); }
+.ep-inner-header, .ep-inner-row { grid-template-columns: 80px minmax(220px,1fr) 110px 85px 90px 80px 120px; }
+.mini-link { border:1px solid rgba(51,92,255,.18); background:rgba(51,92,255,.07); color:var(--primary); border-radius:999px; padding:7px 10px; font-weight:900; cursor:pointer; white-space:nowrap; }
+.mini-link:hover { background:rgba(51,92,255,.13); transform:translateY(-1px); }
+.saved-search-row { display:flex; align-items:center; gap:12px; margin:14px 0 2px; padding:10px 12px; border:1px solid rgba(148,163,184,.18); border-radius:18px; background:linear-gradient(180deg, rgba(255,255,255,.78), rgba(248,250,252,.72)); }
+.saved-search-row b { font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); white-space:nowrap; }
+#savedSearches { display:flex; flex-wrap:wrap; gap:8px; }
+.saved-chip { border:1px solid rgba(51,92,255,.18); background:#fff; color:var(--ink); border-radius:999px; padding:7px 11px; font-weight:900; box-shadow:0 5px 14px rgba(15,23,42,.05); cursor:pointer; }
+.saved-chip:hover { border-color:rgba(51,92,255,.35); color:var(--primary); transform:translateY(-1px); }
+.saved-empty { color:var(--muted); font-size:12px; font-weight:800; }
+.dark .saved-search-row { background:rgba(15,23,42,.55); }
+.dark .saved-chip { background:rgba(15,23,42,.9); }
+
+@media (max-width: 980px) {
+  .ep-inner-header, .ep-inner-row { grid-template-columns: 70px 1fr 90px 70px; }
+  .ep-inner-header span:nth-child(n+5), .ep-inner-row span:nth-child(n+5) { display:none; }
+  .api-acc-stat.trend { display:none; }
+}

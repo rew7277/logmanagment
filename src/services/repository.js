@@ -154,38 +154,75 @@ export async function getServices(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) return fallbackServices(environmentName);
   const result = await query(
-    `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status, s.health_score,
-            COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
-            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms
+    `SELECT s.id, s.name, s.owner, s.runtime_version, s.app_version, s.status,
+            GREATEST(0, LEAST(100,
+              100 - (COALESCE(ls.error_rate,0) * 2) - (GREATEST(COALESCE(ts.p95_latency_ms,0) - 500,0) / 100)
+            ))::int AS health_score,
+            COALESCE(ls.total_logs,0)::int AS calls_total,
+            COALESCE(ls.error_rate,0)::numeric(7,2) AS error_rate,
+            COALESCE(ts.p95_latency_ms,0)::int AS p95_latency_ms,
+            COALESCE(v.volume_7d,'[]'::json) AS volume_7d
      FROM services s
-     LEFT JOIN log_events le ON le.service_id=s.id
-     LEFT JOIN traces t ON t.service_id=s.id AND t.started_at >= now() - interval '24 hours'
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS total_logs,
+              COALESCE(100.0 * count(*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) AS error_rate
+       FROM log_events le
+       WHERE le.service_id=s.id
+     ) ls ON true
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int AS p95_latency_ms
+       FROM traces t
+       WHERE t.service_id=s.id AND t.started_at >= now() - interval '24 hours' AND t.latency_ms > 0
+     ) ts ON true
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object('day', day::date, 'count', cnt) ORDER BY day) AS volume_7d
+       FROM (
+         SELECT d.day, count(le.id)::int AS cnt
+         FROM generate_series(current_date - interval '6 days', current_date, interval '1 day') d(day)
+         LEFT JOIN log_events le ON le.service_id=s.id AND le.timestamp >= d.day AND le.timestamp < d.day + interval '1 day'
+         GROUP BY d.day
+       ) x
+     ) v ON true
      WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'
-     GROUP BY s.id
-     ORDER BY s.health_score ASC, s.name ASC`,
+     ORDER BY health_score ASC, s.name ASC`,
     [env.id]
   );
   return result.rows;
 }
 
-export async function getEndpoints(workspaceSlug, environmentName) {
+export async function getEndpoints(workspaceSlug, environmentName, serviceName = '') {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
-  if (!hasDatabase) return fallbackEndpoints(environmentName);
+  if (!hasDatabase) {
+    const rows = fallbackEndpoints(environmentName);
+    return serviceName ? rows.filter(r => r.service_name === serviceName) : rows;
+  }
+  const values = [env.id];
+  const serviceClause = serviceName ? ` AND s.name=$2` : '';
+  if (serviceName) values.push(serviceName);
   const result = await query(
     `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
-            count(le.*)::int calls_total,
-            COALESCE(100.0 * count(le.*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.*),0),0)::numeric(7,2) error_rate,
-            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY t.latency_ms),0)::int p95_latency_ms,
-            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ((t.meta->>'backend_ms')::int)),0)::int backend_ms
+            COALESCE(ls.calls_total,0)::int AS calls_total,
+            COALESCE(ls.error_rate,0)::numeric(7,2) AS error_rate,
+            COALESCE(ts.p95_latency_ms,0)::int AS p95_latency_ms,
+            COALESCE(ts.backend_ms,0)::int AS backend_ms
      FROM endpoints ep
      JOIN services s ON s.id=ep.service_id
-     LEFT JOIN log_events le ON le.endpoint_id=ep.id
-     LEFT JOIN traces t ON t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours'
-     WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'
-     GROUP BY ep.id, s.name
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS calls_total,
+              COALESCE(100.0 * count(*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) AS error_rate
+       FROM log_events le
+       WHERE le.endpoint_id=ep.id
+     ) ls ON true
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int AS p95_latency_ms,
+              COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY CASE WHEN (meta->>'backend_ms') ~ '^[0-9]+$' THEN NULLIF((meta->>'backend_ms')::int,0) END),0)::int AS backend_ms
+       FROM traces t
+       WHERE t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours' AND t.latency_ms > 0
+     ) ts ON true
+     WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'${serviceClause}
      ORDER BY s.name, ep.method, ep.path`,
-    [env.id]
+    values
   );
   return result.rows;
 }
@@ -767,6 +804,82 @@ export async function getOps(workspaceSlug, environmentName) {
     query(`SELECT d.*, s.name service_name FROM deployments d LEFT JOIN services s ON s.id=d.service_id WHERE d.environment_id=$1 ORDER BY deployed_at DESC LIMIT 20`, [env.id])
   ])
   return { ingestion: ingestion.rows, security: security.rows, deployments: deployments.rows };
+}
+
+
+export async function runAnomalyDetection(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return { checked: 0, created: 0, alerts: [] };
+  if (!hasDatabase) return { checked: 0, created: 0, alerts: [] };
+
+  const result = await query(
+    `WITH buckets AS (
+       SELECT s.id service_id, s.name service_name,
+              date_trunc('hour', le.timestamp) bucket,
+              count(*) total,
+              count(*) FILTER (WHERE le.severity IN ('ERROR','FATAL')) errors
+       FROM services s
+       JOIN log_events le ON le.service_id=s.id
+       WHERE s.environment_id=$1
+         AND s.name !~* '\.xml(:[0-9]+)?$'
+         AND le.timestamp >= now() - interval '7 days'
+       GROUP BY s.id, s.name, date_trunc('hour', le.timestamp)
+     ), scored AS (
+       SELECT service_id, service_name, bucket,
+              COALESCE(100.0 * errors / NULLIF(total,0),0) AS error_rate
+       FROM buckets
+     ), stats AS (
+       SELECT service_id, service_name,
+              avg(error_rate) FILTER (WHERE bucket < date_trunc('hour', now())) AS avg_rate,
+              stddev_pop(error_rate) FILTER (WHERE bucket < date_trunc('hour', now())) AS std_rate,
+              max(error_rate) FILTER (WHERE bucket >= now() - interval '5 minutes') AS current_rate
+       FROM scored
+       GROUP BY service_id, service_name
+     )
+     SELECT * FROM stats
+     WHERE current_rate IS NOT NULL
+       AND COALESCE(std_rate,0) > 0
+       AND current_rate > avg_rate + (2 * std_rate)
+       AND current_rate >= 1`,
+    [env.id]
+  );
+
+  const created = [];
+  for (const row of result.rows) {
+    const desc = `Error rate ${Number(row.current_rate).toFixed(2)}% exceeded baseline ${Number(row.avg_rate).toFixed(2)}% by >2σ.`;
+    const exists = await query(
+      `SELECT id FROM alerts WHERE environment_id=$1 AND service_id=$2 AND status='open' AND title=$3 LIMIT 1`,
+      [env.id, row.service_id, 'Log anomaly detected']
+    );
+    if (exists.rows[0]) continue;
+    const alert = await query(
+      `INSERT INTO alerts(environment_id, service_id, severity, title, description, status)
+       VALUES($1,$2,'P2','Log anomaly detected',$3,'open') RETURNING *`,
+      [env.id, row.service_id, `${row.service_name}: ${desc}`]
+    );
+    created.push(alert.rows[0]);
+  }
+  return { checked: result.rows.length, created: created.length, alerts: created };
+}
+
+export async function getSavedSearches(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env || !hasDatabase) return [];
+  const result = await query(`SELECT id, name, filters, created_at FROM saved_searches WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 50`, [env.id]);
+  return result.rows;
+}
+
+export async function createSavedSearch(workspaceSlug, environmentName, name, filters = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return null;
+  if (!hasDatabase) return { id: `local-search-${Date.now()}`, name, filters, created_at: new Date().toISOString() };
+  const result = await query(
+    `INSERT INTO saved_searches(environment_id, name, filters) VALUES($1,$2,$3::jsonb)
+     ON CONFLICT(environment_id, name) DO UPDATE SET filters=EXCLUDED.filters
+     RETURNING id, name, filters, created_at`,
+    [env.id, name, JSON.stringify(filters || {})]
+  );
+  return result.rows[0];
 }
 
 export async function rca(workspaceSlug, environmentName, queryText = '') {

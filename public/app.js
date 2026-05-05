@@ -18,7 +18,9 @@ const state = {
   uploadSelections: new Set(),
   uploadRows: [],
   expandedApis: new Set(),
-  aeQuery: ''
+  aeQuery: '',
+  services: [],
+  endpoints: []
 };
 
 const icons = {
@@ -49,7 +51,7 @@ function setPage(page){
   $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
-  if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); }
+  if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); }
   if(state.page==='apis')    { loadApisEndpoints(); }
   if(state.page==='uploads') { loadUploadHistory(); }
 }
@@ -57,6 +59,56 @@ function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
 function healthScore(m){const logs=Number(m.logs_ingested||0);if(!logs)return 0;const error=Number(m.error_rate||0);const latency=Number(m.p95_latency_ms||0);const alerts=Number(m.active_alerts||0);return Math.round(Math.max(0,Math.min(100,100-(error*2)-Math.max(0,latency-500)/100-(alerts*3))));}
 function scoreTone(score){if(!score)return 'empty';if(score>=95)return 'good';if(score>=85)return 'warn';return 'bad';}
+
+function sparklineBars(points){
+  const arr = Array.isArray(points) ? points.map(p=>Number(p.count||0)) : [];
+  const max = Math.max(1, ...arr);
+  return `<span class="spark-bars" title="7-day log volume">${arr.map(v=>`<i style="height:${Math.max(3,Math.round((v/max)*22))}px"></i>`).join('')}</span>`;
+}
+function serviceEndpointOptions(serviceName=''){
+  const seen=new Set();
+  return state.endpoints
+    .filter(e => !serviceName || e.service_name === serviceName)
+    .filter(e => e.path && !seen.has(`${e.method||''}|${e.path}`) && seen.add(`${e.method||''}|${e.path}`))
+    .map(e=>`<option value="${esc(e.path)}">${esc((e.method||'')+' '+e.path)}</option>`).join('');
+}
+function refreshPathFilter(){
+  const pf=$('pathFilter'); if(!pf) return;
+  const cur=pf.value;
+  const svc=$('serviceFilter')?.value || '';
+  pf.innerHTML='<option value="">All endpoints</option>'+serviceEndpointOptions(svc);
+  if([...pf.options].some(o=>o.value===cur)) pf.value=cur;
+}
+async function loadSavedSearches(){
+  const host=$('savedSearches'); if(!host) return;
+  try{
+    const rows=await api(endpoint('/saved-searches'));
+    host.innerHTML=rows.length?rows.map(r=>`<button class="saved-chip" data-filters='${esc(JSON.stringify(r.filters||{}))}'>${esc(r.name)}</button>`).join(''):'<span class="saved-empty">No saved searches yet</span>';
+    $$('.saved-chip').forEach(btn=>btn.onclick=()=>{const f=JSON.parse(btn.dataset.filters||'{}');$('logQuery').value=f.q||'';$('severityFilter').value=f.severity||'';$('serviceFilter').value=f.service||'';refreshPathFilter();$('pathFilter').value=f.path||'';$('quickTime').value=f.range||'all';searchLogs(1);});
+  }catch(e){ host.innerHTML='<span class="saved-empty">Saved search unavailable</span>'; }
+}
+async function saveCurrentSearch(){
+  const name=prompt('Name this saved search', $('serviceFilter')?.value ? `${$('serviceFilter').value} errors` : 'Production investigation');
+  if(!name) return;
+  const filters={q:$('logQuery')?.value||'',severity:$('severityFilter')?.value||'',service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',range:$('quickTime')?.value||'all'};
+  await api(endpoint('/saved-searches'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,filters})});
+  toast('Saved search created','success');
+  loadSavedSearches();
+}
+async function runAnomalyCheck(){
+  const res=await api(endpoint('/anomalies/run'),{method:'POST'});
+  toast(res.created?`Created ${res.created} anomaly alert(s)`:'No anomaly detected','success');
+  await Promise.allSettled([loadAlertsOps(),loadOverview()]);
+}
+function openEndpointErrors(service,path){
+  setPage('logs');
+  $('serviceFilter').value=service||'';
+  refreshPathFilter();
+  $('pathFilter').value=path||'';
+  $('severityFilter').value='ERROR';
+  $('quickTime').value='24h';
+  searchLogs(1);
+}
 
 async function initWorkspaces(){try{const ws=await api('/api/workspaces');state.workspace=ws[0]?.slug||state.workspace;const name=ws[0]?.name||'FSBL Production Ops';$('brandWorkspaceName')&&($('brandWorkspaceName').textContent=name);}catch{$('brandWorkspaceName')&&($('brandWorkspaceName').textContent='FSBL Production Ops');}}
 
@@ -88,10 +140,10 @@ async function loadApisEndpoints(q){
       api(endpoint('/services')),
       api(endpoint('/endpoints'))
     ]);
+    state.services=services; state.endpoints=endpoints;
     const sf=$('serviceFilter');
     if(sf){ const cur=sf.value; sf.innerHTML='<option value="">All APIs / services</option>'+services.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join(''); if([...sf.options].some(o=>o.value===cur))sf.value=cur; }
-    const pf=$('pathFilter');
-    if(pf){ const cur=pf.value; const seen=new Set(); pf.innerHTML='<option value="">All endpoints</option>'+endpoints.filter(e=>e.path&&!seen.has(e.path)&&seen.add(e.path)).map(e=>`<option value="${esc(e.path)}">${esc((e.method||'')+' '+e.path)} · ${esc(e.service_name||'')}</option>`).join(''); if([...pf.options].some(o=>o.value===cur))pf.value=cur; }
+    refreshPathFilter();
     const list = $('apiEndpointList');
     if(!list) return;
     const epByService = {};
@@ -111,6 +163,7 @@ async function loadApisEndpoints(q){
             <div class="api-acc-name"><strong>${esc(s.name)}</strong><small>${svcEps.length} endpoint${svcEps.length!==1?'s':''} · Auto-discovered · ${esc(s.owner||'Unowned')}</small></div>
           </div>
           <div class="api-acc-stats">
+            <div class="api-acc-stat trend"><small>7-day volume</small>${sparklineBars(s.volume_7d)}</div>
             <div class="api-acc-stat"><small>Status</small><b class="status-badge ${esc(s.status||'observed')}">${esc(s.status||'observed')}</b></div>
             <div class="api-acc-stat"><small>Error rate</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
             <div class="api-acc-stat"><small>P95</small><b>${fmt(s.p95_latency_ms)}ms</b></div>
@@ -118,7 +171,7 @@ async function loadApisEndpoints(q){
           </div>
         </button>
         <div class="api-accordion-body"><div class="api-accordion-body-inner">
-          ${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmt(ep.p95_latency_ms)}ms</b></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
+          ${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmt(ep.p95_latency_ms)}ms</b></span><span><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
         </div></div>
       </div>`;
     }).join('');
@@ -132,6 +185,7 @@ async function loadApisEndpoints(q){
         btn.setAttribute('aria-expanded',open);
       };
     });
+    $$('.endpoint-errors').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();openEndpointErrors(btn.dataset.service, btn.dataset.path);});
   } catch(e){toast('APIs & Endpoints: '+e.message,'error');}
 }
 async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmt(t.latency_ms)}ms</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id are searchable; trace waterfall needs trace ingestion.');}
@@ -458,6 +512,6 @@ async function uploadBody(body,name='pasted logs'){
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;closeLogModal();state.traceFilter=tid;setPage('logs');$('logQuery').value='';searchLogs(1);toast(`Tracing ${tid}`,'success');};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
-async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory()]);}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter();};if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;closeLogModal();state.traceFilter=tid;setPage('logs');$('logQuery').value='';searchLogs(1);toast(`Tracing ${tid}`,'success');};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
