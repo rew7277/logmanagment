@@ -250,71 +250,71 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`,
   `CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`
 ,
+  `CREATE TABLE IF NOT EXISTS app_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'developer' CHECK (role IN ('admin','developer','tester','manager','viewer')),
+    encrypted_profile TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(workspace_id, email)
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS invitation_codes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'developer',
+    status TEXT NOT NULL DEFAULT 'active',
+    max_uses INTEGER NOT NULL DEFAULT 1,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS approval_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    requested_by TEXT NOT NULL DEFAULT 'system',
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    decided_by TEXT,
+    decided_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
   `CREATE TABLE IF NOT EXISTS notification_channels (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    channel_type TEXT NOT NULL CHECK (channel_type IN ('WEBHOOK','SLACK','EMAIL')) DEFAULT 'WEBHOOK',
+    channel_type TEXT NOT NULL CHECK (channel_type IN ('webhook','email','slack','teams')),
     target TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(environment_id, name)
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_notification_channels_env ON notification_channels(environment_id, enabled)`,
-  `CREATE TABLE IF NOT EXISTS approval_requests (
+  `CREATE TABLE IF NOT EXISTS api_key_usage_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
-    request_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected')) DEFAULT 'pending',
-    requested_by TEXT DEFAULT 'system',
-    reviewed_by TEXT,
-    reviewed_at TIMESTAMPTZ,
+    key_id UUID REFERENCES ingest_api_keys(id) ON DELETE SET NULL,
+    source TEXT NOT NULL DEFAULT 'API',
+    request_path TEXT,
+    status_code INTEGER,
+    bytes INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_requests_env_status ON approval_requests(environment_id, status, created_at DESC)`,
-  `CREATE TABLE IF NOT EXISTS user_roles (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
-    user_email TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin','developer','tester','manager','viewer')) DEFAULT 'viewer',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(environment_id, user_email)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_user_roles_env ON user_roles(environment_id, role)`,
-  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS request_count BIGINT NOT NULL DEFAULT 0`,
-  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS error_count BIGINT NOT NULL DEFAULT 0`,
-  `ALTER TABLE ingest_api_keys ADD COLUMN IF NOT EXISTS last_error TEXT`
+  `CREATE INDEX IF NOT EXISTS idx_api_key_usage_env_time ON api_key_usage_events(environment_id, created_at DESC)`
 
 
-,
-  `CREATE TABLE IF NOT EXISTS app_users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
-    email TEXT NOT NULL UNIQUE,
-    full_name TEXT,
-    role TEXT NOT NULL DEFAULT 'admin',
-    password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_login_at TIMESTAMPTZ
-  )`,
-  `CREATE TABLE IF NOT EXISTS invite_codes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-    code_hash TEXT NOT NULL UNIQUE,
-    code_prefix TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'viewer',
-    status TEXT NOT NULL DEFAULT 'active',
-    expires_at TIMESTAMPTZ,
-    used_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
-    used_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_app_users_workspace ON app_users(workspace_id, role)`,
-  `CREATE INDEX IF NOT EXISTS idx_invite_codes_workspace ON invite_codes(workspace_id, status)`
+
 ];
 
 export async function migrate() {

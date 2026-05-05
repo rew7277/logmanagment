@@ -1695,126 +1695,95 @@ export async function deleteApiRegistryItem(workspaceSlug, environmentName, payl
   return { deleted, tombstone: true };
 }
 
-
-// ─── V36 Enterprise control-plane helpers ───────────────────────────────────
-export async function listNotificationChannels(workspaceSlug, environmentName) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return fallback.notificationChannels?.get(`${workspaceSlug}:${environmentName}`) || [];
-  const r = await query(`SELECT id, name, channel_type, target, enabled, created_at FROM notification_channels WHERE environment_id=$1 ORDER BY created_at DESC`, [env.id]);
-  return r.rows;
+// ─── Auth, RBAC, approval workflow and channels ──────────────────────────────
+const AUTH_SECRET = process.env.AUTH_ENCRYPTION_KEY || process.env.JWT_SECRET || 'observex-dev-secret-change-me';
+function sha(value='') { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
+function passwordHash(password='', salt=crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.pbkdf2Sync(String(password), salt, 120000, 32, 'sha256').toString('hex');
+  return `pbkdf2_sha256$120000$${salt}$${hash}`;
 }
-
-export async function upsertNotificationChannel(workspaceSlug, environmentName, payload={}) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  const name = String(payload.name || '').trim();
-  const channelType = String(payload.channel_type || payload.type || 'WEBHOOK').toUpperCase();
-  const target = String(payload.target || '').trim();
-  const enabled = payload.enabled !== false;
-  if (!name || !target) throw new Error('Channel name and target are required');
-  if (!hasDatabase) {
-    fallback.notificationChannels = fallback.notificationChannels || new Map();
-    const key = `${workspaceSlug}:${environmentName}`;
-    const list = fallback.notificationChannels.get(key) || [];
-    const row = { id: payload.id || `channel-${Date.now()}`, name, channel_type: channelType, target, enabled, created_at: new Date().toISOString() };
-    const next = [row, ...list.filter(x => String(x.id)!==String(row.id) && x.name!==name)];
-    fallback.notificationChannels.set(key, next); return row;
-  }
-  const r = await query(`INSERT INTO notification_channels(environment_id, name, channel_type, target, enabled)
-    VALUES($1,$2,$3,$4,$5)
-    ON CONFLICT(environment_id, name) DO UPDATE SET channel_type=EXCLUDED.channel_type, target=EXCLUDED.target, enabled=EXCLUDED.enabled
-    RETURNING *`, [env.id, name, channelType, target, enabled]);
-  await audit(env.id, 'upsert', 'notification_channel', r.rows[0].id, null, r.rows[0]).catch(()=>{});
+function verifyPassword(password='', stored='') {
+  const parts = String(stored).split('$');
+  if (parts.length !== 4) return false;
+  const [, iter, salt, hash] = parts;
+  const calc = crypto.pbkdf2Sync(String(password), salt, Number(iter)||120000, 32, 'sha256').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(calc));
+}
+function encryptionKey() { return crypto.createHash('sha256').update(AUTH_SECRET).digest(); }
+function encryptJson(obj={}) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const enc = Buffer.concat([cipher.update(JSON.stringify(obj), 'utf8'), cipher.final()]);
+  return `${iv.toString('base64')}.${cipher.getAuthTag().toString('base64')}.${enc.toString('base64')}`;
+}
+function decryptJson(blob='') {
+  try { const [ivB, tagB, encB] = String(blob).split('.'); const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(ivB,'base64')); decipher.setAuthTag(Buffer.from(tagB,'base64')); return JSON.parse(Buffer.concat([decipher.update(Buffer.from(encB,'base64')), decipher.final()]).toString('utf8')); } catch { return {}; }
+}
+async function workspaceBySlug(workspaceSlug='fsbl-prod-ops') {
+  const env = await ensureWorkspaceEnvironment(workspaceSlug, 'PROD');
+  const r = await query(`SELECT w.* FROM workspaces w JOIN environments e ON e.workspace_id=w.id WHERE e.id=$1`, [env.id]);
   return r.rows[0];
 }
-
-export async function deleteNotificationChannel(workspaceSlug, environmentName, id) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return { deleted: 1 };
-  const r = await query(`DELETE FROM notification_channels WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id)]);
-  await audit(env.id, 'delete', 'notification_channel', String(id), r.rows[0] || null, null).catch(()=>{});
-  return { deleted: r.rowCount || 0 };
-}
-
-export async function listApprovalRequests(workspaceSlug, environmentName) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return fallback.approvals?.get(`${workspaceSlug}:${environmentName}`) || [];
-  const r = await query(`SELECT * FROM approval_requests WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 50`, [env.id]);
-  return r.rows;
-}
-
-export async function createApprovalRequest(workspaceSlug, environmentName, payload={}) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  const requestType = String(payload.request_type || 'policy_change');
-  const title = String(payload.title || 'Approval request').trim();
-  if (!hasDatabase) {
-    fallback.approvals = fallback.approvals || new Map();
-    const key = `${workspaceSlug}:${environmentName}`;
-    const row = { id:`approval-${Date.now()}`, request_type:requestType, title, payload, status:'pending', created_at:new Date().toISOString() };
-    fallback.approvals.set(key, [row, ...(fallback.approvals.get(key)||[])]); return row;
+export async function registerUser(workspaceSlug, payload={}) {
+  const workspaceName = String(payload.workspace_name || workspaceSlug || 'FSBL Production Ops').trim();
+  const slug = String(payload.workspace_slug || workspaceSlug || workspaceName).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60) || 'fsbl-prod-ops';
+  const email = String(payload.email||'').trim().toLowerCase();
+  const password = String(payload.password||'');
+  if (!email.includes('@')) throw new Error('Valid email is required');
+  if (password.length < 8) throw new Error('Password must be at least 8 characters');
+  if (!hasDatabase) return { token:`demo-token-${Date.now()}`, user:{email, role:'admin'}, workspace:{slug, name:workspaceName} };
+  await ensureWorkspaceEnvironment(slug, 'PROD');
+  const ws = await workspaceBySlug(slug);
+  const count = await query(`SELECT count(*)::int c FROM app_users WHERE workspace_id=$1`, [ws.id]);
+  let role = count.rows[0].c === 0 ? 'admin' : 'developer';
+  const invite = String(payload.invitation_code||'').trim();
+  if (count.rows[0].c > 0) {
+    if (!invite) throw new Error('Invitation code is required for this workspace');
+    const inv = await query(`SELECT * FROM invitation_codes WHERE workspace_id=$1 AND code_hash=$2 AND status='active' AND used_count < max_uses AND (expires_at IS NULL OR expires_at > now())`, [ws.id, sha(invite)]);
+    if (!inv.rows[0]) throw new Error('Invalid or expired invitation code');
+    role = inv.rows[0].role || role;
+    await query(`UPDATE invitation_codes SET used_count=used_count+1 WHERE id=$1`, [inv.rows[0].id]);
   }
-  const r = await query(`INSERT INTO approval_requests(environment_id, request_type, title, payload, requested_by)
-    VALUES($1,$2,$3,$4,$5) RETURNING *`, [env.id, requestType, title, payload, payload.requested_by || 'system']);
-  await audit(env.id, 'create', 'approval_request', r.rows[0].id, null, r.rows[0]).catch(()=>{});
-  return r.rows[0];
+  const profile = encryptJson({ full_name: payload.full_name || email.split('@')[0], workspace_name: workspaceName, created_ip: payload.ip || null });
+  const user = await query(`INSERT INTO app_users(workspace_id,email,password_hash,role,encrypted_profile) VALUES($1,$2,$3,$4,$5) RETURNING id,email,role,status,created_at`, [ws.id,email,passwordHash(password),role,profile]);
+  await audit(null, 'register', 'user', email, null, { role }).catch(()=>{});
+  return createSessionForUser(user.rows[0], ws);
 }
-
-export async function reviewApprovalRequest(workspaceSlug, environmentName, id, status='approved') {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  const nextStatus = String(status).toLowerCase() === 'rejected' ? 'rejected' : 'approved';
-  if (!hasDatabase) return { id, status: nextStatus };
-  const r = await query(`UPDATE approval_requests SET status=$3, reviewed_by='system', reviewed_at=now() WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id), nextStatus]);
-  await audit(env.id, nextStatus, 'approval_request', String(id), null, r.rows[0] || null).catch(()=>{});
-  return r.rows[0] || { id, status: nextStatus };
+async function createSessionForUser(user, workspace) {
+  const token = `ox_sess_${crypto.randomBytes(32).toString('base64url')}`;
+  await query(`INSERT INTO user_sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+ interval '7 days')`, [user.id, sha(token)]);
+  return { token, user:{ id:user.id, email:user.email, role:user.role, status:user.status }, workspace:{ slug:workspace.slug, name:workspace.name } };
 }
-
-export async function listUserRoles(workspaceSlug, environmentName) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return fallback.userRoles?.get(`${workspaceSlug}:${environmentName}`) || [{ user_email:'admin@company.com', role:'admin' }];
-  const r = await query(`SELECT id, user_email, role, created_at FROM user_roles WHERE environment_id=$1 ORDER BY role, user_email`, [env.id]);
-  return r.rows;
+export async function loginUser(workspaceSlug, payload={}) {
+  const email = String(payload.email||'').trim().toLowerCase();
+  const ws = await workspaceBySlug(workspaceSlug || payload.workspace_slug || 'fsbl-prod-ops');
+  if (!hasDatabase) return { token:`demo-token-${Date.now()}`, user:{email, role:'admin'}, workspace:{slug:workspaceSlug||'fsbl-prod-ops', name:'Demo Workspace'} };
+  const r = await query(`SELECT * FROM app_users WHERE workspace_id=$1 AND email=$2 AND status='active'`, [ws.id,email]);
+  const user = r.rows[0];
+  if (!user || !verifyPassword(payload.password||'', user.password_hash)) throw new Error('Invalid login credentials');
+  return createSessionForUser(user, ws);
 }
-
-export async function upsertUserRole(workspaceSlug, environmentName, payload={}) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  const email = String(payload.user_email || payload.email || '').trim().toLowerCase();
-  const role = String(payload.role || 'viewer').toLowerCase();
-  if (!email) throw new Error('User email is required');
-  if (!hasDatabase) return { id:`role-${Date.now()}`, user_email:email, role };
-  const r = await query(`INSERT INTO user_roles(environment_id, user_email, role) VALUES($1,$2,$3)
-    ON CONFLICT(environment_id, user_email) DO UPDATE SET role=EXCLUDED.role RETURNING *`, [env.id, email, role]);
-  await audit(env.id, 'upsert', 'user_role', email, null, r.rows[0]).catch(()=>{});
-  return r.rows[0];
+export async function getUserBySession(token='') {
+  if (!token) return null;
+  if (!hasDatabase && token.startsWith('demo-token')) return { email:'demo@observex.local', role:'admin' };
+  const r = await query(`SELECT u.id,u.email,u.role,u.status,w.slug workspace_slug,w.name workspace_name,u.encrypted_profile
+    FROM user_sessions s JOIN app_users u ON u.id=s.user_id JOIN workspaces w ON w.id=u.workspace_id
+    WHERE s.token_hash=$1 AND s.expires_at > now() AND u.status='active'`, [sha(token)]);
+  const u = r.rows[0]; if (!u) return null;
+  return { id:u.id, email:u.email, role:u.role, workspace_slug:u.workspace_slug, workspace_name:u.workspace_name, profile:decryptJson(u.encrypted_profile) };
 }
-
-export async function deleteUserRole(workspaceSlug, environmentName, id) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return { deleted: 1 };
-  const r = await query(`DELETE FROM user_roles WHERE environment_id=$1 AND id::text=$2 RETURNING *`, [env.id, String(id)]);
-  await audit(env.id, 'delete', 'user_role', String(id), r.rows[0] || null, null).catch(()=>{});
-  return { deleted: r.rowCount || 0 };
+export async function createInvitationCode(workspaceSlug, payload={}, actor='system') {
+  const ws = await workspaceBySlug(workspaceSlug); const code = `OX-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+  const role = ['admin','developer','tester','manager','viewer'].includes(payload.role) ? payload.role : 'developer';
+  if (!hasDatabase) return { code, role, max_uses: Number(payload.max_uses||1) };
+  const r = await query(`INSERT INTO invitation_codes(workspace_id,code_hash,role,max_uses,expires_at) VALUES($1,$2,$3,$4,now()+ interval '30 days') RETURNING id,role,status,max_uses,used_count,created_at,expires_at`, [ws.id,sha(code),role,Number(payload.max_uses||1)]);
+  await query(`INSERT INTO audit_logs(environment_id,actor,action,entity_type,entity_id,after_value) SELECT e.id,$1,'create','invitation_code',$2,$3 FROM environments e WHERE e.workspace_id=$4 AND e.name='PROD' LIMIT 1`, [actor,r.rows[0].id,JSON.stringify({role}),ws.id]).catch(()=>{});
+  return { ...r.rows[0], code };
 }
-
-export async function getIngestKeyUsage(workspaceSlug, environmentName) {
-  const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!hasDatabase) return [];
-  const r = await query(`SELECT id, key_name, key_prefix, status, allowed_sources, request_count, error_count, last_error, last_used_at, created_at
-    FROM ingest_api_keys WHERE environment_id=$1 ORDER BY COALESCE(last_used_at, created_at) DESC`, [env.id]);
-  return r.rows;
-}
-
-export async function getTopology(workspaceSlug, environmentName) {
-  const services = await getServices(workspaceSlug, environmentName).catch(()=>[]);
-  const endpoints = await getEndpoints(workspaceSlug, environmentName).catch(()=>[]);
-  const nodes = [{ id:'ingestion', label:'Ingestion', type:'source' }];
-  const edges = [];
-  for (const s of services.slice(0,30)) {
-    nodes.push({ id:`svc:${s.name}`, label:s.name, type:'service', error_rate:Number(s.error_rate||0), health_score:Number(s.health_score||0) });
-    edges.push({ from:'ingestion', to:`svc:${s.name}`, label:'logs' });
-  }
-  for (const ep of endpoints.slice(0,80)) {
-    const eid = `ep:${ep.service_name}:${ep.method}:${ep.path}`;
-    nodes.push({ id:eid, label:`${ep.method||''} ${ep.path||''}`.trim(), type:'endpoint', service_name:ep.service_name, error_rate:Number(ep.error_rate||0) });
-    edges.push({ from:`svc:${ep.service_name}`, to:eid, label:`${ep.calls_total ?? ep.calls_per_hour ?? 0} calls` });
-  }
-  return { nodes, edges, note:'Topology is inferred from service_name, endpoint path, trace/correlation IDs and log sequencing. For perfect dependency maps, ingest outbound dependency events too.' };
-}
+export async function listApprovalRequests(workspaceSlug, environmentName) { const env=await getEnvironment(workspaceSlug, environmentName); if(!hasDatabase) return []; const r=await query(`SELECT * FROM approval_requests WHERE environment_id=$1 ORDER BY created_at DESC LIMIT 100`,[env.id]); return r.rows; }
+export async function createApprovalRequest(workspaceSlug, environmentName, payload={}, actor='system') { const env=await getEnvironment(workspaceSlug, environmentName); if(!hasDatabase) return { id:`approval-${Date.now()}`, status:'pending', ...payload }; const r=await query(`INSERT INTO approval_requests(environment_id,requested_by,action,entity_type,payload) VALUES($1,$2,$3,$4,$5) RETURNING *`,[env.id,actor,payload.action||'change',payload.entity_type||'ops',payload.payload||{}]); await audit(env.id,'request_approval','approval_request',r.rows[0].id,null,payload).catch(()=>{}); return r.rows[0]; }
+export async function decideApprovalRequest(workspaceSlug, environmentName, id, decision='approved', actor='system') { const env=await getEnvironment(workspaceSlug, environmentName); if(!hasDatabase) return { id, status:decision }; const status=decision==='rejected'?'rejected':'approved'; const r=await query(`UPDATE approval_requests SET status=$1, decided_by=$2, decided_at=now() WHERE environment_id=$3 AND id::text=$4 RETURNING *`,[status,actor,env.id,String(id)]); await audit(env.id,status,'approval_request',id,null,r.rows[0]).catch(()=>{}); return r.rows[0]||{id,status:'not_found'}; }
+export async function listNotificationChannels(workspaceSlug, environmentName) { const env=await getEnvironment(workspaceSlug, environmentName); if(!hasDatabase) return []; const r=await query(`SELECT * FROM notification_channels WHERE environment_id=$1 ORDER BY created_at DESC`,[env.id]); return r.rows; }
+export async function upsertNotificationChannel(workspaceSlug, environmentName, payload={}) { const env=await getEnvironment(workspaceSlug, environmentName); const name=String(payload.name||payload.channel_type||'Channel').slice(0,80); const type=['webhook','email','slack','teams'].includes(payload.channel_type)?payload.channel_type:'webhook'; const target=String(payload.target||'').trim(); if(!target) throw new Error('Notification target is required'); if(!hasDatabase) return { name, channel_type:type, target, enabled:true }; const r=await query(`INSERT INTO notification_channels(environment_id,name,channel_type,target,enabled) VALUES($1,$2,$3,$4,$5) ON CONFLICT(environment_id,name) DO UPDATE SET channel_type=EXCLUDED.channel_type,target=EXCLUDED.target,enabled=EXCLUDED.enabled RETURNING *`,[env.id,name,type,target,payload.enabled!==false]); await audit(env.id,'upsert','notification_channel',name,null,r.rows[0]).catch(()=>{}); return r.rows[0]; }
+export async function getApiKeyUsageAnalytics(workspaceSlug, environmentName) { const env=await getEnvironment(workspaceSlug, environmentName); if(!hasDatabase) return { total_requests:0, by_key:[], by_status:[] }; const [total,byKey,byStatus]=await Promise.all([query(`SELECT count(*)::int total_requests, COALESCE(sum(bytes),0)::int bytes FROM api_key_usage_events WHERE environment_id=$1`,[env.id]),query(`SELECT COALESCE(k.key_name,'unknown') key_name,count(*)::int requests,max(u.created_at) last_seen FROM api_key_usage_events u LEFT JOIN ingest_api_keys k ON k.id=u.key_id WHERE u.environment_id=$1 GROUP BY 1 ORDER BY requests DESC LIMIT 10`,[env.id]),query(`SELECT COALESCE(status_code,0)::int status_code,count(*)::int requests FROM api_key_usage_events WHERE environment_id=$1 GROUP BY 1 ORDER BY requests DESC`,[env.id])]); return { ...total.rows[0], by_key:byKey.rows, by_status:byStatus.rows }; }
+export async function recordApiKeyUsage(workspaceSlug, environmentName, keyId=null, meta={}) { if(!hasDatabase) return; const env=await getEnvironment(workspaceSlug, environmentName); await query(`INSERT INTO api_key_usage_events(environment_id,key_id,source,request_path,status_code,bytes) VALUES($1,$2,$3,$4,$5,$6)`,[env.id,keyId,meta.source||'API',meta.request_path||null,meta.status_code||200,Number(meta.bytes||0)]).catch(()=>{}); }

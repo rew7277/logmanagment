@@ -235,37 +235,3 @@ After deployment run:
 ```bash
 npm run db:migrate
 ```
-
-## V36 updates
-
-- Centralized light/dark theme color system for Ops, Alerts, RCA, API registry and topology cards.
-- Improved API/endpoint table spacing: endpoint path uses available width, endpoint delete has its own column, API delete is placed next to health/manage.
-- Added Approval Workflow APIs and Ops UI.
-- Added Alert Notification Channels for Slack/Webhook/Email targets.
-- Added API Key Usage Analytics for request count, error count, last used and last error.
-- Added WebSocket Live Logs: `wss://<host>/ws/live-logs?workspace=<workspace>&environment=<environment>`.
-- Added environment scoped RBAC management UI.
-- Added inferred topology view from services/endpoints.
-
-Run:
-
-```bash
-npm install
-npm run db:migrate
-npm start
-```
-
-
-## V37 enterprise login and settings
-
-Added a futuristic login/create-account screen. Passwords are stored as salted PBKDF2 hashes in PostgreSQL (`app_users`), not plain text. Invitation codes are stored as SHA-256 hashes and shown only once.
-
-New Settings page after login includes account info, invite-code generation, and shortcuts to Ops controls such as AI Provider, Ingestion API Keys, PII Masking, Retention/Rate Limit, Roles, Approvals, and API Docs.
-
-Run after deploy:
-
-```bash
-npm run db:migrate
-```
-
-Topology note: the topology view is inferred from service, endpoint, error and trace/correlation fields. For true end-to-end flow maps, send outbound dependency events with the same `trace_id`/`correlation_id` from MuleSoft flows.

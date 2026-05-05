@@ -12,9 +12,6 @@
  */
 
 import express from 'express';
-import crypto from 'crypto';
-import { query as dbQuery, hasDatabase as dbAvailable } from '../db/pool.js';
-
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -24,99 +21,25 @@ import {
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
   getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
-  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem, listNotificationChannels, upsertNotificationChannel, deleteNotificationChannel, listApprovalRequests, createApprovalRequest, reviewApprovalRequest, listUserRoles, upsertUserRole, deleteUserRole, getIngestKeyUsage, getTopology
+  getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem, registerUser, loginUser, getUserBySession, createInvitationCode, listApprovalRequests, createApprovalRequest, decideApprovalRequest, listNotificationChannels, upsertNotificationChannel, getApiKeyUsageAnalytics, recordApiKeyUsage
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
 import { rateLimit }        from '../middleware/rateLimit.js';
 import { parseUploadText, isNewLogStart, parseLogBlock, createStreamingParser } from '../services/logParser.js';
 
 const router = express.Router();
-
-// Must be declared before any route uses it.
-// In ESM, const/function expressions are not hoisted; using asyncHandler before
-// this line crashes Railway at startup with "Cannot access 'asyncHandler' before initialization".
+router.use(rateLimit({ maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), windowMs: 60_000 }));
 const asyncHandler = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-router.use(rateLimit({ maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), windowMs: 60_000 }));
+function bearer(req){ return (req.headers.authorization||'').replace(/^Bearer\s+/i,''); }
+async function actorFromReq(req){ try { return await getUserBySession(bearer(req)); } catch { return null; } }
+function requireRole(...roles){ return async (req,res,next)=>{ const u=await actorFromReq(req); if(!u) return res.status(401).json({error:'Login required'}); if(roles.length && !roles.includes(u.role)) return res.status(403).json({error:`${roles.join(' or ')} role required`}); req.user=u; next(); }; }
+
+router.post('/auth/register', asyncHandler(async (req,res)=> res.status(201).json({ data: await registerUser(req.body.workspace_slug || req.body.workspace || 'fsbl-prod-ops', { ...req.body, ip:req.ip }) })));
+router.post('/auth/login', asyncHandler(async (req,res)=> res.json({ data: await loginUser(req.body.workspace_slug || req.body.workspace || 'fsbl-prod-ops', req.body) })));
+router.get('/auth/me', asyncHandler(async (req,res)=> { const u=await actorFromReq(req); if(!u) return res.status(401).json({error:'Not logged in'}); res.json({ data:u }); }));
+
 const ingestLimit = rateLimit({ maxRequests: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), windowMs: 60_000 });
-
-// ─── Auth / User Onboarding ──────────────────────────────────────────────────
-// Passwords are stored as salted PBKDF2 hashes. No plain passwords or API keys are stored.
-const demoUsers = new Map();
-const demoInvites = new Map();
-function sha256(v){ return crypto.createHash('sha256').update(String(v)).digest('hex'); }
-function pbkdf2(password, salt){ return crypto.pbkdf2Sync(String(password), salt, 120000, 32, 'sha256').toString('hex'); }
-function makeToken(user){
-  const payload = Buffer.from(JSON.stringify({ uid:user.id, email:user.email, role:user.role, ws:user.workspace_slug || 'fsbl-prod-ops', exp:Date.now()+7*86400000 })).toString('base64url');
-  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || 'observex-dev-secret-change-me').update(payload).digest('base64url');
-  return `${payload}.${sig}`;
-}
-function verifyTokenValue(token){
-  const [payload,sig] = String(token||'').split('.'); if(!payload||!sig) return null;
-  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || 'observex-dev-secret-change-me').update(payload).digest('base64url');
-  if(!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  const data = JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
-  if(data.exp < Date.now()) return null;
-  return data;
-}
-async function ensureWorkspaceByName(name='FSBL Production Ops'){
-  const slug = String(name||'FSBL Production Ops').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'default-workspace';
-  if(!dbAvailable) return { id:'demo-workspace', slug, name };
-  const org = await dbQuery(`INSERT INTO organizations(name, slug) VALUES($1,$2) ON CONFLICT(slug) DO UPDATE SET name=EXCLUDED.name RETURNING id`, [name, slug]);
-  const ws = await dbQuery(`INSERT INTO workspaces(org_id,name,slug) VALUES($1,$2,$3) ON CONFLICT(org_id, slug) DO UPDATE SET name=EXCLUDED.name RETURNING id, slug, name`, [org.rows[0].id, name, slug]);
-  return ws.rows[0];
-}
-router.post('/auth/register', asyncHandler(async (req,res)=>{
-  const { email, password, full_name, workspace_name, invite_code } = req.body || {};
-  if(!email || !password) return res.status(400).json({ error:'Email and password are required' });
-  if(String(password).length < 8) return res.status(400).json({ error:'Password must be at least 8 characters' });
-  const workspace = await ensureWorkspaceByName(workspace_name || 'FSBL Production Ops');
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = pbkdf2(password, salt);
-  const role = invite_code ? 'developer' : 'admin';
-  if(!dbAvailable){
-    const id = crypto.randomUUID(); const user={id,email:String(email).toLowerCase(),full_name,role,password_hash:hash,password_salt:salt,workspace_slug:workspace.slug}; demoUsers.set(user.email,user);
-    return res.status(201).json({ data:{ token:makeToken(user), user:{email:user.email,full_name,role,workspace_slug:workspace.slug} } });
-  }
-  if(invite_code){
-    const inv = await dbQuery(`SELECT id,status,expires_at FROM invite_codes WHERE code_hash=$1 AND status='active'`, [sha256(invite_code)]);
-    if(!inv.rowCount) return res.status(403).json({ error:'Invalid or expired invitation code' });
-  }
-  const exists = await dbQuery(`SELECT id FROM app_users WHERE lower(email)=lower($1)`, [email]);
-  if(exists.rowCount) return res.status(409).json({ error:'User already exists. Please login.' });
-  const u = await dbQuery(`INSERT INTO app_users(workspace_id,email,full_name,role,password_hash,password_salt) VALUES($1,lower($2),$3,$4,$5,$6) RETURNING id,email,full_name,role`, [workspace.id,email,full_name||'',role,hash,salt]);
-  if(invite_code) await dbQuery(`UPDATE invite_codes SET status='used', used_by=$1, used_at=now() WHERE code_hash=$2`, [u.rows[0].id, sha256(invite_code)]);
-  res.status(201).json({ data:{ token:makeToken({...u.rows[0], workspace_slug:workspace.slug}), user:{...u.rows[0], workspace_slug:workspace.slug} } });
-}));
-router.post('/auth/login', asyncHandler(async (req,res)=>{
-  const { email, password } = req.body || {}; if(!email||!password) return res.status(400).json({ error:'Email and password are required' });
-  if(!dbAvailable){ const u=demoUsers.get(String(email).toLowerCase()); if(!u || pbkdf2(password,u.password_salt)!==u.password_hash) return res.status(401).json({ error:'Invalid login' }); return res.json({ data:{ token:makeToken(u), user:{email:u.email,full_name:u.full_name,role:u.role,workspace_slug:u.workspace_slug} } }); }
-  const r = await dbQuery(`SELECT u.id,u.email,u.full_name,u.role,u.password_hash,u.password_salt,w.slug workspace_slug FROM app_users u LEFT JOIN workspaces w ON w.id=u.workspace_id WHERE lower(u.email)=lower($1) AND u.status='active'`, [email]);
-  if(!r.rowCount) return res.status(401).json({ error:'Invalid login' });
-  const u=r.rows[0]; if(pbkdf2(password,u.password_salt)!==u.password_hash) return res.status(401).json({ error:'Invalid login' });
-  await dbQuery(`UPDATE app_users SET last_login_at=now() WHERE id=$1`, [u.id]);
-  res.json({ data:{ token:makeToken(u), user:{id:u.id,email:u.email,full_name:u.full_name,role:u.role,workspace_slug:u.workspace_slug} } });
-}));
-router.get('/auth/me', asyncHandler(async (req,res)=>{
-  const t = verifyTokenValue((req.headers.authorization||'').replace(/^Bearer\s+/i,''));
-  if(!t) return res.status(401).json({ error:'Not authenticated' });
-  res.json({ data:{ user:t } });
-}));
-router.post('/auth/invite-codes', asyncHandler(async (req,res)=>{
-  const t = verifyTokenValue((req.headers.authorization||'').replace(/^Bearer\s+/i,'')); if(!t) return res.status(401).json({ error:'Not authenticated' });
-  const role = req.body?.role || 'developer'; const plain = `ox_inv_${crypto.randomBytes(9).toString('hex')}`; const prefix = plain.slice(0,12);
-  if(!dbAvailable){ demoInvites.set(prefix,{prefix,role,status:'active',created_at:new Date().toISOString()}); return res.status(201).json({ data:{ invite_code:plain, prefix, role } }); }
-  const ws = await ensureWorkspaceByName(req.body?.workspace_name || 'FSBL Production Ops');
-  await dbQuery(`INSERT INTO invite_codes(workspace_id,code_hash,code_prefix,role,expires_at) VALUES($1,$2,$3,$4,now()+interval '30 days')`, [ws.id, sha256(plain), prefix, role]);
-  res.status(201).json({ data:{ invite_code:plain, prefix, role, expires_in_days:30 } });
-}));
-router.get('/auth/invite-codes', asyncHandler(async (req,res)=>{
-  const t = verifyTokenValue((req.headers.authorization||'').replace(/^Bearer\s+/i,'')); if(!t) return res.status(401).json({ error:'Not authenticated' });
-  if(!dbAvailable) return res.json({ data:Array.from(demoInvites.values()) });
-  const r = await dbQuery(`SELECT code_prefix, role, status, created_at, expires_at, used_at FROM invite_codes ORDER BY created_at DESC LIMIT 30`);
-  res.json({ data:r.rows });
-}));
-
 
 const MAX_UPLOAD_BYTES  = Number(process.env.MAX_UPLOAD_BYTES  || 750 * 1024 * 1024);
 const BASE_BATCH_SIZE   = Number(process.env.INGEST_BATCH_SIZE || 5000);
@@ -398,41 +321,6 @@ router.get('/:workspace/:environment/audit-logs', asyncHandler(async (req, res) 
 ));
 
 
-
-router.get('/:workspace/:environment/notification-channels', asyncHandler(async (req, res) =>
-  res.json({ data: await listNotificationChannels(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
-router.post('/:workspace/:environment/notification-channels', asyncHandler(async (req, res) =>
-  res.status(201).json({ data: await upsertNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
-));
-router.delete('/:workspace/:environment/notification-channels/:id', asyncHandler(async (req, res) =>
-  res.json({ data: await deleteNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id) })
-));
-router.get('/:workspace/:environment/approvals', asyncHandler(async (req, res) =>
-  res.json({ data: await listApprovalRequests(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
-router.post('/:workspace/:environment/approvals', asyncHandler(async (req, res) =>
-  res.status(201).json({ data: await createApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
-));
-router.post('/:workspace/:environment/approvals/:id/review', asyncHandler(async (req, res) =>
-  res.json({ data: await reviewApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id, req.body?.status || 'approved') })
-));
-router.get('/:workspace/:environment/roles', asyncHandler(async (req, res) =>
-  res.json({ data: await listUserRoles(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
-router.post('/:workspace/:environment/roles', asyncHandler(async (req, res) =>
-  res.status(201).json({ data: await upsertUserRole(normalizeWorkspace(req), normalizeEnvironment(req), req.body || {}) })
-));
-router.delete('/:workspace/:environment/roles/:id', asyncHandler(async (req, res) =>
-  res.json({ data: await deleteUserRole(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id) })
-));
-router.get('/:workspace/:environment/ingest-key-usage', asyncHandler(async (req, res) =>
-  res.json({ data: await getIngestKeyUsage(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
-router.get('/:workspace/:environment/topology', asyncHandler(async (req, res) =>
-  res.json({ data: await getTopology(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
-
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {
   const data = await getOverview(normalizeWorkspace(req), normalizeEnvironment(req));
   res.json({ data });
@@ -683,5 +571,14 @@ router.post('/:workspace/:environment/logs/upload', ingestLimit, asyncHandler(as
 
   res.status(201).json({ inserted, parsed, rejected, bytes, upload_id: uploadRecord?.id, parser: 'mule+generic', anomaly });
 }));
+
+
+router.post('/:workspace/invitations', requireRole('admin','manager'), asyncHandler(async (req,res)=> res.status(201).json({ data: await createInvitationCode(normalizeWorkspace(req), req.body, req.user?.email || 'system') })));
+router.get('/:workspace/:environment/approvals', asyncHandler(async (req,res)=> res.json({ data: await listApprovalRequests(normalizeWorkspace(req), normalizeEnvironment(req)) })));
+router.post('/:workspace/:environment/approvals', asyncHandler(async (req,res)=> { const u=await actorFromReq(req); res.status(201).json({ data: await createApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.body, u?.email || 'system') }); }));
+router.post('/:workspace/:environment/approvals/:id/:decision', requireRole('admin','manager'), asyncHandler(async (req,res)=> res.json({ data: await decideApprovalRequest(normalizeWorkspace(req), normalizeEnvironment(req), req.params.id, req.params.decision, req.user?.email || 'system') })));
+router.get('/:workspace/:environment/notification-channels', asyncHandler(async (req,res)=> res.json({ data: await listNotificationChannels(normalizeWorkspace(req), normalizeEnvironment(req)) })));
+router.post('/:workspace/:environment/notification-channels', asyncHandler(async (req,res)=> res.status(201).json({ data: await upsertNotificationChannel(normalizeWorkspace(req), normalizeEnvironment(req), req.body) })));
+router.get('/:workspace/:environment/ingest-key-usage', asyncHandler(async (req,res)=> res.json({ data: await getApiKeyUsageAnalytics(normalizeWorkspace(req), normalizeEnvironment(req)) })));
 
 export default router;
