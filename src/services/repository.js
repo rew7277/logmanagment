@@ -1318,9 +1318,9 @@ export async function getEnvironmentConfig(workspaceSlug, environmentName) {
     environment: env?.name || environmentName,
     policy: { retention_days: 30, archive_to_s3: false, max_upload_mb: 750, rate_limit_per_minute: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 180), ingest_rate_limit_per_minute: Number(process.env.INGEST_RATE_LIMIT_MAX_REQUESTS || 30), allowed_ingestion_sources: ['UPLOAD','API','S3'], notes: '' },
     masking_rules: [
-      { field_name: 'password', pattern: '(?i)password\\s*[:=]\\s*[^,\\s]+', replacement: 'password=[MASKED]', enabled: true },
-      { field_name: 'authorization', pattern: '(?i)authorization\\s*[:=]\\s*bearer\\s+[^,\\s]+', replacement: 'Authorization: Bearer [MASKED]', enabled: true },
-      { field_name: 'token', pattern: '(?i)(token|secret|api[_-]?key)\\s*[:=]\\s*[^,\\s]+', replacement: '$1=[MASKED]', enabled: true }
+      { id: 'password', field_name: 'password', pattern: '(?i)password\\s*[:=]\\s*[^,\\s]+', replacement: 'password=[MASKED]', enabled: true, builtin: true },
+      { id: 'authorization', field_name: 'authorization', pattern: '(?i)authorization\\s*[:=]\\s*bearer\\s+[^,\\s]+', replacement: 'Authorization: Bearer [MASKED]', enabled: true, builtin: true },
+      { id: 'token', field_name: 'token', pattern: '(?i)(token|secret|api[_-]?key)\\s*[:=]\\s*[^,\\s]+', replacement: '$1=[MASKED]', enabled: true, builtin: true }
     ],
     rca: { provider: process.env.AI_PROVIDER || 'local', model: process.env.AI_MODEL || 'local-rule-engine', enabled: Boolean(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY) }
   };
@@ -1334,7 +1334,10 @@ export async function getEnvironmentConfig(workspaceSlug, environmentName) {
     query(`SELECT id, field_name, pattern, replacement, enabled FROM masking_rules WHERE environment_id=$1 ORDER BY created_at ASC`, [env.id]).catch(() => ({ rows: [] })),
     query(`INSERT INTO rca_settings(environment_id, provider, model, enabled) VALUES($1,$2,$3,$4) ON CONFLICT(environment_id) DO NOTHING; SELECT provider, model, enabled FROM rca_settings WHERE environment_id=$1`, [env.id, defaultConfig.rca.provider, defaultConfig.rca.model, defaultConfig.rca.enabled]).catch(() => ({ rows: [] }))
   ]);
-  return { environment: env.name, policy: policy.rows?.at?.(-1) || defaultConfig.policy, masking_rules: masking.rows.length ? masking.rows : defaultConfig.masking_rules, rca: rcaCfg.rows?.at?.(-1) || defaultConfig.rca };
+  const byField = new Map(defaultConfig.masking_rules.map(r => [r.field_name, r]));
+  for (const r of masking.rows || []) byField.set(r.field_name, { ...r, builtin: defaultConfig.masking_rules.some(d => d.field_name === r.field_name) });
+  const mergedMaskingRules = Array.from(byField.values()).filter(r => r.enabled !== false);
+  return { environment: env.name, policy: policy.rows?.at?.(-1) || defaultConfig.policy, masking_rules: mergedMaskingRules, rca: rcaCfg.rows?.at?.(-1) || defaultConfig.rca };
 }
 
 export async function updateEnvironmentConfig(workspaceSlug, environmentName, payload = {}) {
@@ -1445,7 +1448,15 @@ export async function deleteMaskingRule(workspaceSlug, environmentName, ruleIdOr
     return { deleted: list.length - next.length };
   }
   const result = await query(`DELETE FROM masking_rules WHERE environment_id=$1 AND (id::text=$2 OR field_name=$2) RETURNING id`, [env.id, keyVal]);
-  return { deleted: result.rowCount || 0 };
+  if (result.rowCount) return { deleted: result.rowCount || 0 };
+  const builtin = ['password','authorization','token'].includes(keyVal.toLowerCase());
+  if (builtin) {
+    await query(`INSERT INTO masking_rules(environment_id, field_name, pattern, replacement, enabled)
+      VALUES($1,$2,NULL,'[MASKED]',false)
+      ON CONFLICT(environment_id, field_name) DO UPDATE SET enabled=false`, [env.id, keyVal.toLowerCase()]);
+    return { deleted: 1, disabled_builtin: true };
+  }
+  return { deleted: 0 };
 }
 
 export async function resetEnvironmentPolicy(workspaceSlug, environmentName) {

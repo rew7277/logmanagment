@@ -58,6 +58,7 @@ function setPage(page){
   if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
   if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
   if(state.page==='ops') { loadAlertsOps(); }
+  if(state.page==='apiDocs') { renderApiDoc('upload'); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -529,7 +530,9 @@ async function loadEnvironmentConfig(){
       ['Environment isolation', `Current scope: ${state.environment}. Analytics are not merged across environments.`]
     ].map(([k,v])=>`<div class="policy-item"><b>${esc(k)}</b><p>${esc(v)}</p></div>`).join('');
     const rules = cfg.masking_rules || [];
-    if($('maskingRuleList')) $('maskingRuleList').innerHTML = rules.map(r=>`<div class="policy-item editable"><div><b>${esc(r.field_name)}</b><p>${esc(r.pattern || 'Field-name based masking')} → ${esc(r.replacement || '[MASKED]')} · ${r.enabled?'enabled':'disabled'}</p></div><div class="row-actions"><button class="mini-link edit-mask" data-id="${esc(r.id||r.field_name)}" data-field="${esc(r.field_name)}" data-pattern="${esc(r.pattern||'')}" data-replacement="${esc(r.replacement||'[MASKED]')}">Edit</button><button class="mini-link danger delete-mask" data-id="${esc(r.id||r.field_name)}">Delete</button></div></div>`).join('') || empty('No masking rules configured yet.'); $$('.edit-mask').forEach(b=>b.onclick=()=>{ if($('maskFieldName')) $('maskFieldName').value=b.dataset.field||''; if($('maskPattern')) $('maskPattern').value=b.dataset.pattern||''; if($('maskReplacement')) $('maskReplacement').value=b.dataset.replacement||'[MASKED]'; }); $$('.delete-mask').forEach(b=>b.onclick=()=>deleteMaskRule(b.dataset.id));
+    if($('maskingRuleList')) $('maskingRuleList').innerHTML = rules.map(r=>`<div class="mask-rule-card"><div class="mask-rule-main"><div class="mask-rule-title"><b>${esc(r.field_name)}</b>${r.builtin?'<span class="tiny-badge">Default</span>':''}</div><p><code>${esc(r.pattern || 'Field-name based masking')}</code></p><small>Replacement: <b>${esc(r.replacement || '[MASKED]')}</b> · ${r.enabled?'enabled':'disabled'}</small></div><div class="mask-rule-actions"><button class="icon-btn edit-mask" title="Edit masking rule" data-id="${esc(r.id||r.field_name)}" data-field="${esc(r.field_name)}" data-pattern="${esc(r.pattern||'')}" data-replacement="${esc(r.replacement||'[MASKED]')}">Edit</button><button class="icon-btn danger delete-mask" title="Delete masking rule" data-id="${esc(r.id||r.field_name)}" data-field="${esc(r.field_name)}">Delete</button></div></div>`).join('') || empty('No masking rules configured yet.');
+    $$('.edit-mask').forEach(b=>b.onclick=()=>{ if($('maskFieldName')) $('maskFieldName').value=b.dataset.field||''; if($('maskPattern')) $('maskPattern').value=b.dataset.pattern||''; if($('maskReplacement')) $('maskReplacement').value=b.dataset.replacement||'[MASKED]'; $('maskFieldName')?.focus(); });
+    $$('.delete-mask').forEach(b=>b.onclick=()=>deleteMaskRule(b.dataset.id, b.dataset.field));
     const rca = cfg.rca || {};
     if($('aiProvider')) $('aiProvider').value = rca.provider || 'local';
     if($('aiModel')) $('aiModel').value = rca.model || '';
@@ -557,12 +560,19 @@ async function saveMaskRule(){
   toast('Masking rule saved','success'); ['maskFieldName','maskPattern','maskReplacement'].forEach(id=>$(id)&&($(id).value='')); await loadEnvironmentConfig();
 }
 
-async function deleteMaskRule(id){
-  if(!id) return;
-  if(!confirm('Delete this masking rule?')) return;
-  await api(endpoint(`/masking-rules/${encodeURIComponent(id)}`),{method:'DELETE'});
-  toast('Masking rule deleted','success'); await loadEnvironmentConfig();
+async function deleteMaskRule(id, field){
+  const key = id || field;
+  if(!key) return;
+  if(!confirm(`Delete masking rule ${field || key}?`)) return;
+  const res = await api(endpoint(`/masking-rules/${encodeURIComponent(key)}`),{method:'DELETE'});
+  if(res?.deleted || res?.disabled_builtin){
+    toast('Masking rule deleted','success');
+  } else {
+    toast('Rule was already removed or not found','info');
+  }
+  await loadEnvironmentConfig();
 }
+
 
 async function saveAiProvider(){
   const payload={ rca:{ provider:$('aiProvider')?.value||'local', model:$('aiModel')?.value||'', enabled:!!$('aiEnabled')?.checked } };
@@ -694,6 +704,63 @@ async function uploadBody(body,name='pasted logs'){
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; const envs=[...new Set((state.environments&&state.environments.length?state.environments:['PROD','UAT','DEV','DR']).concat(getExtraEnvs()))]; host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected':'Available environment scope'}</p></div><div class="row-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join(''); $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env)); $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env)); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+
+const apiDocTemplates = {
+  upload: {
+    title: 'POST Logs Upload', method: 'POST', path: '/logs/upload',
+    description: 'Upload raw MuleSoft logs, JSONL, or plain text into the selected workspace/environment.',
+    headers: {'Content-Type':'text/plain'},
+    body: '{"timestamp":"2026-05-04T10:00:00Z","severity":"ERROR","service":"payment-api","method":"POST","path":"/payment/status","trace_id":"TR-1001","message":"Timeout"}'
+  },
+  search: {
+    title: 'GET Search Logs', method: 'GET', path: '/logs?q=timeout&severity=ERROR&limit=10',
+    description: 'Search indexed logs by text, severity, service, endpoint, trace ID, and time range.',
+    headers: {}, body: ''
+  },
+  errorGroups: {
+    title: 'GET Error Groups', method: 'GET', path: '/error-groups?range=24h',
+    description: 'Get grouped error signatures for faster RCA and incident triage.',
+    headers: {}, body: ''
+  },
+  rca: {
+    title: 'POST AI RCA', method: 'POST', path: '/rca',
+    description: 'Run local or configured AI RCA against the selected environment data.',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({query:'Analyze top production errors and suggest RCA'}, null, 2)
+  }
+};
+function renderApiDoc(key='upload'){
+  const t = apiDocTemplates[key] || apiDocTemplates.upload;
+  $$('.endpoint-doc').forEach(b=>b.classList.toggle('active', b.dataset.docEndpoint===key));
+  if($('apiDocDetails')) $('apiDocDetails').innerHTML = `<h4>${esc(t.title)}</h4><p>${esc(t.description)}</p><div class="doc-meta"><span>Workspace: ${esc(state.workspace)}</span><span>Environment: ${esc(state.environment)}</span></div>`;
+  if($('apiDocMethod')) $('apiDocMethod').value = t.method;
+  if($('apiDocUrl')) $('apiDocUrl').value = endpoint(t.path);
+  if($('apiDocHeaders')) $('apiDocHeaders').value = JSON.stringify(t.headers, null, 2);
+  if($('apiDocBody')) $('apiDocBody').value = t.body || '';
+  if($('apiDocStatus')) $('apiDocStatus').textContent = 'Ready';
+}
+async function sendApiDocRequest(){
+  const method = $('apiDocMethod')?.value || 'GET';
+  const url = $('apiDocUrl')?.value || endpoint('/logs?limit=10');
+  let headers = {};
+  try { headers = JSON.parse($('apiDocHeaders')?.value || '{}'); } catch { return toast('Headers must be valid JSON','error'); }
+  const body = $('apiDocBody')?.value || '';
+  const started = performance.now();
+  if($('apiDocStatus')) $('apiDocStatus').textContent = 'Sending...';
+  try{
+    const opt = { method, headers };
+    if(method !== 'GET' && method !== 'HEAD' && body) opt.body = body;
+    const r = await fetch(url, opt);
+    const text = await r.text();
+    let parsed = text; try { parsed = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    if($('apiDocStatus')) $('apiDocStatus').textContent = `${r.status} ${r.ok?'Success':'Failed'} · ${Math.round(performance.now()-started)}ms`;
+    if($('apiDocResponse')) $('apiDocResponse').textContent = parsed || '(empty response)';
+  }catch(e){
+    if($('apiDocStatus')) $('apiDocStatus').textContent = 'Connection failed';
+    if($('apiDocResponse')) $('apiDocResponse').textContent = e.message;
+  }
+}
+
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
