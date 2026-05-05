@@ -332,11 +332,22 @@ export function sanitizeParsedRecords(records) {
     r.trace_id       = r.trace_id       || ids.trace_id;
     r.transaction_id = r.transaction_id || ids.transaction_id;
     r.message        = maskSensitiveText(r.message || '');
-    r.raw = enrichRaw(
+    const enrichedRaw = enrichRaw(
       r.raw || {},
       { ...ids, trace_id: r.trace_id || ids.trace_id, transaction_id: r.transaction_id || ids.transaction_id },
       ids.event_id ? 'mule-event-header' : 'post-process'
     );
+    const analytics = extractAnalytics({ ...r, raw: enrichedRaw });
+    r.raw = {
+      ...enrichedRaw,
+      analytics,
+      http_status: analytics.http_status ?? enrichedRaw.http_status ?? null,
+      latency_ms: analytics.latency_ms ?? enrichedRaw.latency_ms ?? null,
+      flow_name: analytics.flow_name ?? enrichedRaw.flow_name ?? null,
+      app_name: analytics.app_name ?? enrichedRaw.app_name ?? null,
+      request_uri: analytics.request_uri ?? enrichedRaw.request_uri ?? null
+    };
+    if (!r.path && analytics.request_uri) r.path = analytics.request_uri;
   }
   clean = propagateContext(clean);
   clean = dedupeRecords(clean);

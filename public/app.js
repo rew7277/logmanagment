@@ -37,6 +37,8 @@ const icons = {
 
 function esc(v){return String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function fmt(n){return new Intl.NumberFormat('en-IN').format(Number(n||0));}
+function fmtMs(n){return Number(n||0)>0 ? `${fmt(n)}ms` : '—';}
+function fmtPct(n){return n===null||n===undefined||n==='' ? '—' : `${Number(n||0).toFixed(2)}%`;}
 function toast(msg, type='info'){const t=document.createElement('div');t.className=`toast ${type}`;t.textContent=msg;($('toastHost')||document.body).appendChild(t);setTimeout(()=>t.remove(),4200);}
 function endpoint(path){return `/api/${state.workspace}/${state.environment}${path}`;}
 async function api(url,opt={}){const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
@@ -51,8 +53,8 @@ function setPage(page){
   $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
-  if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); }
-  if(state.page==='apis')    { loadApisEndpoints(); }
+  if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
+  if(state.page==='apis')    { loadApisEndpoints(); loadDeployImpact(); }
   if(state.page==='uploads') { loadUploadHistory(); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
@@ -63,7 +65,7 @@ function scoreTone(score){if(!score)return 'empty';if(score>=95)return 'good';if
 function sparklineBars(points){
   const arr = Array.isArray(points) ? points.map(p=>Number(p.count||0)) : [];
   const max = Math.max(1, ...arr);
-  return `<span class="spark-bars" title="7-day log volume">${arr.map(v=>`<i style="height:${Math.max(3,Math.round((v/max)*22))}px"></i>`).join('')}</span>`;
+  return `<span class="spark-bars" title="${esc((points||[]).map(p=>`${String(p.day||'').slice(0,10)}: ${fmt(p.count)}`).join(' | ') || '7-day log volume')}">${arr.map(v=>`<i style="height:${Math.max(3,Math.round((v/max)*22))}px"></i>`).join('')}</span>`;
 }
 function serviceEndpointOptions(serviceName=''){
   const seen=new Set();
@@ -100,6 +102,36 @@ async function runAnomalyCheck(){
   toast(res.created?`Created ${res.created} anomaly alert(s)`:'No anomaly detected','success');
   await Promise.allSettled([loadAlertsOps(),loadOverview()]);
 }
+
+async function loadErrorGroups(){
+  const host=$('errorGroups'); if(!host) return;
+  try{
+    const params=new URLSearchParams({service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',range:$('quickTime')?.value||'24h'});
+    const rows=await api(endpoint('/error-groups?'+params));
+    host.innerHTML=rows.length?`<div class="error-group-grid">${rows.slice(0,6).map(g=>`<button class="error-group-chip" data-sig="${esc(g.signature||'')}"><b>${fmt(g.occurrences)}</b><span>${esc(String(g.signature||'Unknown').slice(0,58))}</span><small>Last ${new Date(g.last_seen).toLocaleTimeString()}</small></button>`).join('')}</div>`:'<span class="saved-empty">No grouped errors for current scope</span>';
+    $$('.error-group-chip').forEach(btn=>btn.onclick=()=>{$('logQuery').value=btn.dataset.sig||'';$('severityFilter').value='ERROR';searchLogs(1);});
+  }catch(e){host.innerHTML='<span class="saved-empty">Error grouping unavailable</span>';}
+}
+
+async function loadDeployImpact(){
+  const host=$('deployImpactList'); if(!host) return;
+  try{
+    const rows=await api(endpoint('/deploy-impact'));
+    host.innerHTML=rows.length?`<div class="impact-list">${rows.slice(0,5).map(r=>{const delta=Number(r.error_delta_pct||0);return `<div class="impact-row"><div><strong>${esc(r.source_name||'upload')}</strong><small>${new Date(r.created_at).toLocaleString()}</small></div><div><small>Before</small><b>${fmtPct(r.before_error_rate)}</b></div><div><small>After</small><b style="color:${delta>1?'var(--bad)':delta>0?'var(--warn)':'var(--good)'}">${fmtPct(r.after_error_rate)}</b></div><div><small>Delta</small><b>${delta>0?'+':''}${delta.toFixed(2)}%</b></div></div>`;}).join('')}</div>`:empty('Upload at least two time windows to see before-after impact.');
+  }catch(e){host.innerHTML=empty('Deploy impact unavailable');}
+}
+
+async function openTraceDetail(traceId){
+  if(!traceId) return;
+  try{
+    const data=await api(endpoint('/traces/'+encodeURIComponent(traceId)));
+    setText('modalTitle',`Trace waterfall · ${traceId}`);
+    const steps=data.waterfall||[];
+    setHtml('modalBody', steps.length?`<div class="trace-waterfall">${steps.map(st=>`<div class="trace-step ${esc(st.severity)}"><span class="step-dot"></span><div><b>${esc(st.service_name||'Unknown service')}</b><small>${esc((st.method||'')+' '+(st.path||''))}</small><p>${esc(String(st.message||'').slice(0,180))}</p></div><div><small>+${fmt(st.at_ms)}ms</small><b>${fmtMs(st.latency_ms)}</b></div></div>`).join('')}</div>`:empty('No events found for this trace ID.'));
+    $('logModal')&&$('logModal').classList.add('open');
+  }catch(e){toast(e.message,'error');}
+}
+
 function openEndpointErrors(service,path){
   setPage('logs');
   $('serviceFilter').value=service||'';
@@ -123,7 +155,7 @@ async function loadOverview(){
     setHtml('metrics',[
       metric(state.environment,score?score+'%':'--','Calculated health',tone),
       metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'From ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good'),
-      metric('P95 latency',`${fmt(m.p95_latency_ms)}ms`,'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral'),
+      metric('P95 latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral'),
       metric('Logs',fmt(m.logs_ingested),'Total ingested logs','neutral'),
       metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good')
     ].join(''));
@@ -160,18 +192,18 @@ async function loadApisEndpoints(q){
         <button class="api-accordion-header" data-api="${esc(s.name)}" aria-expanded="${isOpen}">
           <div class="api-acc-left">
             <span class="api-acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></span>
-            <div class="api-acc-name"><strong>${esc(s.name)}</strong><small>${svcEps.length} endpoint${svcEps.length!==1?'s':''} · Auto-discovered · ${esc(s.owner||'Unowned')}</small></div>
+            <div class="api-acc-name"><strong>${esc(s.name)}</strong><small>${svcEps.length} endpoint${svcEps.length!==1?'s':''} · Auto-discovered · ${esc(s.owner||'Unowned')} ${s.last_seen?'· Last seen '+new Date(s.last_seen).toLocaleTimeString():''} ${s.traffic_delta_pct!==null&&s.traffic_delta_pct!==undefined?'· Traffic '+(Number(s.traffic_delta_pct)>0?'+':'')+Number(s.traffic_delta_pct).toFixed(1)+'%':''}</small></div>
           </div>
           <div class="api-acc-stats">
             <div class="api-acc-stat trend"><small>7-day volume</small>${sparklineBars(s.volume_7d)}</div>
             <div class="api-acc-stat"><small>Status</small><b class="status-badge ${esc(s.status||'observed')}">${esc(s.status||'observed')}</b></div>
             <div class="api-acc-stat"><small>Error rate</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
-            <div class="api-acc-stat"><small>P95</small><b>${fmt(s.p95_latency_ms)}ms</b></div>
+            <div class="api-acc-stat"><small>P95</small><b>${fmtMs(s.p95_latency_ms)}</b></div>
             <div class="api-acc-stat"><small>Health</small><b style="color:${health>=80?'var(--good)':health>=50?'var(--warn)':'var(--bad)'}">${health?health+'%':'—'}</b></div>
           </div>
         </button>
         <div class="api-accordion-body"><div class="api-accordion-body-inner">
-          ${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmt(ep.p95_latency_ms)}ms</b></span><span><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
+          ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><span><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
         </div></div>
       </div>`;
     }).join('');
@@ -188,12 +220,13 @@ async function loadApisEndpoints(q){
     $$('.endpoint-errors').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();openEndpointErrors(btn.dataset.service, btn.dataset.path);});
   } catch(e){toast('APIs & Endpoints: '+e.message,'error');}
 }
-async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmt(t.latency_ms)}ms</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id are searchable; trace waterfall needs trace ingestion.');}
+async function loadTraces(){const rows=await api(endpoint('/traces'));$('traceList').innerHTML=rows.length?rows.map(t=>`<div class="row"><div><strong>${esc(t.trace_id)}</strong><small>${esc(t.service_name||'service unknown')} ${esc(t.method||'')} ${esc(t.path||'')}</small></div><div><small>Status</small><b>${esc(t.status)}</b></div><div><small>Latency</small><b>${fmtMs(t.latency_ms)}</b></div><div><small>Started</small><b>${new Date(t.started_at).toLocaleString()}</b></div><div><small>Env</small><b>${state.environment}</b></div></div>`).join(''):empty('No traces yet. Logs with trace_id are searchable; trace waterfall needs trace ingestion.');}
 
 function logParams(page=state.logPage){return new URLSearchParams({limit:String(state.logPageSize),page:String(page),q:$('logQuery')?.value||'',severity:$('severityFilter')?.value||'',service:$('serviceFilter')?.value||'',path:$('pathFilter')?.value||'',trace_id:state.traceFilter||'',upload_id:state.uploadFilter||'',range:$('quickTime')?.value||'all'});}
 async function searchLogs(page=state.logPage){
   state.logPage=Math.max(page,1);
   const result=await api(endpoint('/logs?'+logParams(state.logPage)));
+    loadErrorGroups();
   const rows=Array.isArray(result)?result:(result.items||[]);
   state.lastLogs=rows;
   const total=Array.isArray(result)?rows.length:result.total;
@@ -208,14 +241,14 @@ async function searchLogs(page=state.logPage){
 
   function sevColor(s){return{ERROR:'#ff4d6d',FATAL:'#c9184a',WARN:'#f77f00',INFO:'#4cc9f0',DEBUG:'#adb5bd'}[s]||'#adb5bd';}
   function latencyBadge(raw){
-    const m=String(raw?.original||'').match(/(?:took|latency|duration|elapsed|response[_-]?time)\s*[:=]?\s*(\d+)\s*ms/i);
-    if(!m) return '';
-    const ms=Number(m[1]);
+    const direct=raw?.latency_ms||raw?.analytics?.latency_ms; const m=String(raw?.original||'').match(/(?:took|latency|duration|elapsed|response[_-]?time)\s*[:=]?\s*(\d+)\s*ms/i);
+    if(!direct&&!m) return '';
+    const ms=Number(direct||m[1]);
     const color=ms>2000?'#ff4d6d':ms>500?'#f77f00':'#2dc653';
     return `<span class="latency-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${ms}ms</span>`;
   }
   function httpBadge(raw){
-    const p=raw?.payload; const st=p?.exit?.HttpStatus||p?.statusCode||p?.status;
+    const p=raw?.payload; const st=raw?.http_status||raw?.analytics?.http_status||p?.exit?.HttpStatus||p?.statusCode||p?.status;
     if(!st) return '';
     const s=Number(st); const color=s>=500?'#ff4d6d':s>=400?'#f77f00':s>=200?'#2dc653':'#adb5bd';
     return `<span class="http-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">HTTP ${s}</span>`;
@@ -512,6 +545,6 @@ async function uploadBody(body,name='pasted logs'){
 }
 
 function renderEnvButtons(){const host=$('envButtons'); if(!host) return; host.innerHTML=['PROD','UAT','DEV','DR'].map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${env}">${env}</button>`).join(''); $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});}
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter();};if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;closeLogModal();state.traceFilter=tid;setPage('logs');$('logQuery').value='';searchLogs(1);toast(`Tracing ${tid}`,'success');};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

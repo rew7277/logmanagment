@@ -19,6 +19,7 @@ import {
   bulkCreateLogs, createUploadRecord, deleteAllUploadHistory,
   deleteEnvironmentLogs, deleteUploadHistory, getAlerts, getEndpoints,
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
+  getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch
 } from '../services/repository.js';
 import { requireApiKey }    from '../middleware/auth.js';
@@ -259,6 +260,20 @@ router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
 
 router.get('/:workspace/:environment/traces',  asyncHandler(async (req, res) =>
   res.json({ data: await getTraces(normalizeWorkspace(req), normalizeEnvironment(req)) })
+));
+
+router.get('/:workspace/:environment/traces/:traceId', asyncHandler(async (req, res) =>
+  res.json({ data: await getTraceDetail(normalizeWorkspace(req), normalizeEnvironment(req), req.params.traceId) })
+));
+
+router.get('/:workspace/:environment/error-groups', asyncHandler(async (req, res) =>
+  res.json({ data: await getErrorGroups(normalizeWorkspace(req), normalizeEnvironment(req), {
+    service: req.query.service, path: req.query.path, range: req.query.range || '24h'
+  }) })
+));
+
+router.get('/:workspace/:environment/deploy-impact', asyncHandler(async (req, res) =>
+  res.json({ data: await getDeployImpact(normalizeWorkspace(req), normalizeEnvironment(req)) })
 ));
 router.get('/:workspace/:environment/alerts',  asyncHandler(async (req, res) =>
   res.json({ data: await getAlerts(normalizeWorkspace(req), normalizeEnvironment(req)) })

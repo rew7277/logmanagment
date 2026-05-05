@@ -160,7 +160,12 @@ export async function getServices(workspaceSlug, environmentName) {
             ))::int AS health_score,
             COALESCE(ls.total_logs,0)::int AS calls_total,
             COALESCE(ls.error_rate,0)::numeric(7,2) AS error_rate,
-            COALESCE(ts.p95_latency_ms,0)::int AS p95_latency_ms,
+            NULLIF(COALESCE(ts.p95_latency_ms,0),0)::int AS p95_latency_ms,
+            COALESCE(prev.calls_24h,0)::int AS calls_24h,
+            COALESCE(prev.prev_calls_24h,0)::int AS previous_calls_24h,
+            CASE WHEN COALESCE(prev.prev_calls_24h,0)=0 THEN NULL ELSE ROUND(100.0*(prev.calls_24h-prev.prev_calls_24h)/NULLIF(prev.prev_calls_24h,0),2) END AS traffic_delta_pct,
+            COALESCE(err.top_errors,'[]'::json) AS top_errors,
+            last_seen.last_seen,
             COALESCE(v.volume_7d,'[]'::json) AS volume_7d
      FROM services s
      LEFT JOIN LATERAL (
@@ -174,6 +179,22 @@ export async function getServices(workspaceSlug, environmentName) {
        FROM traces t
        WHERE t.service_id=s.id AND t.started_at >= now() - interval '24 hours' AND t.latency_ms > 0
      ) ts ON true
+     LEFT JOIN LATERAL (
+       SELECT count(*) FILTER (WHERE le.timestamp >= now() - interval '24 hours')::int calls_24h,
+              count(*) FILTER (WHERE le.timestamp < now() - interval '24 hours' AND le.timestamp >= now() - interval '48 hours')::int prev_calls_24h
+       FROM log_events le WHERE le.service_id=s.id
+     ) prev ON true
+     LEFT JOIN LATERAL (
+       SELECT max(le.timestamp) AS last_seen FROM log_events le WHERE le.service_id=s.id
+     ) last_seen ON true
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object('signature', signature, 'count', cnt) ORDER BY cnt DESC) AS top_errors
+       FROM (
+         SELECT COALESCE(NULLIF(le.raw->>'error_type',''), NULLIF(le.raw->>'exception',''), NULLIF(le.raw->'payload'->>'errorType',''), NULLIF(le.raw->'analytics'->>'http_status',''), regexp_replace(left(le.message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error') AS signature, count(*)::int cnt
+         FROM log_events le WHERE le.service_id=s.id AND le.severity IN ('ERROR','FATAL')
+         GROUP BY signature ORDER BY cnt DESC LIMIT 3
+       ) e
+     ) err ON true
      LEFT JOIN LATERAL (
        SELECT json_agg(json_build_object('day', day::date, 'count', cnt) ORDER BY day) AS volume_7d
        FROM (
@@ -204,8 +225,10 @@ export async function getEndpoints(workspaceSlug, environmentName, serviceName =
     `SELECT ep.id, ep.method, ep.path, ep.status, s.name service_name,
             COALESCE(ls.calls_total,0)::int AS calls_total,
             COALESCE(ls.error_rate,0)::numeric(7,2) AS error_rate,
-            COALESCE(ts.p95_latency_ms,0)::int AS p95_latency_ms,
-            COALESCE(ts.backend_ms,0)::int AS backend_ms
+            NULLIF(COALESCE(ts.p95_latency_ms,0),0)::int AS p95_latency_ms,
+            COALESCE(ts.backend_ms,0)::int AS backend_ms,
+            last_seen.last_seen,
+            COALESCE(err.top_errors,'[]'::json) AS top_errors
      FROM endpoints ep
      JOIN services s ON s.id=ep.service_id
      LEFT JOIN LATERAL (
@@ -214,6 +237,17 @@ export async function getEndpoints(workspaceSlug, environmentName, serviceName =
        FROM log_events le
        WHERE le.endpoint_id=ep.id
      ) ls ON true
+     LEFT JOIN LATERAL (
+       SELECT max(le.timestamp) AS last_seen FROM log_events le WHERE le.endpoint_id=ep.id
+     ) last_seen ON true
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object('signature', signature, 'count', cnt) ORDER BY cnt DESC) AS top_errors
+       FROM (
+         SELECT COALESCE(NULLIF(le.raw->>'error_type',''), NULLIF(le.raw->>'exception',''), NULLIF(le.raw->'payload'->>'errorType',''), NULLIF(le.raw->'analytics'->>'http_status',''), regexp_replace(left(le.message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error') AS signature, count(*)::int cnt
+         FROM log_events le WHERE le.endpoint_id=ep.id AND le.severity IN ('ERROR','FATAL')
+         GROUP BY signature ORDER BY cnt DESC LIMIT 3
+       ) e
+     ) err ON true
      LEFT JOIN LATERAL (
        SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int AS p95_latency_ms,
               COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY CASE WHEN (meta->>'backend_ms') ~ '^[0-9]+$' THEN NULLIF((meta->>'backend_ms')::int,0) END),0)::int AS backend_ms
@@ -249,6 +283,16 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
   if (f.service) add(`s.name ILIKE '%' || ? || '%'`, String(f.service));
   if (f.path) add(`ep.path ILIKE '%' || ? || '%'`, String(f.path));
   if (f.upload_id) add('le.upload_id = ?', String(f.upload_id));
+  if (f.http_status) {
+    const base = values.length;
+    values.push(String(f.http_status), String(f.http_status));
+    where.push(`(le.raw->>'http_status' = $${base+1} OR le.raw->'analytics'->>'http_status' = $${base+2})`);
+  }
+  if (f.flow_name) {
+    const base = values.length;
+    values.push(String(f.flow_name), String(f.flow_name), String(f.flow_name));
+    where.push(`(le.raw->>'flow_name' ILIKE '%' || $${base+1} || '%' OR le.raw->'analytics'->>'flow_name' ILIKE '%' || $${base+2} || '%' OR le.raw->'payload'->'entry'->>'FlowName' ILIKE '%' || $${base+3} || '%')`);
+  }
   if (f.trace_id) {
     const base = values.length;
     values.push(String(f.trace_id), String(f.trace_id), String(f.trace_id), String(f.trace_id));
@@ -277,7 +321,9 @@ export async function getLogs(workspaceSlug, environmentName, limit = 50, filter
     ),
     query(
       `SELECT le.id, le.upload_id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
-              CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
+              CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path,
+              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END, CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END, 0) AS latency_ms,
+              COALESCE(le.raw->>'http_status', le.raw->'analytics'->>'http_status') AS http_status
        FROM log_events le
        LEFT JOIN services s ON s.id=le.service_id
        LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
@@ -298,7 +344,7 @@ async function upsertTraceFromLog(client, env, serviceId, endpointId, payload) {
   const status = ['ERROR','FATAL'].includes(String(payload.severity || '').toUpperCase()) ? 'error' : 'success';
   await client.query(
     `INSERT INTO traces(environment_id, service_id, endpoint_id, trace_id, status, latency_ms, started_at, meta)
-     VALUES($1::uuid,$2::uuid,$3::uuid,$4::text,$5::text,0,COALESCE($6::timestamptz, now()),$7::jsonb)
+     VALUES($1::uuid,$2::uuid,$3::uuid,$4::text,$5::text,$8::int,COALESCE($6::timestamptz, now()),$7::jsonb)
      ON CONFLICT(environment_id, trace_id) DO UPDATE SET
        service_id=COALESCE(traces.service_id, EXCLUDED.service_id),
        endpoint_id=COALESCE(traces.endpoint_id, EXCLUDED.endpoint_id),
@@ -311,8 +357,10 @@ async function upsertTraceFromLog(client, env, serviceId, endpointId, payload) {
       transaction_id: payload.transaction_id || payload.raw?.transaction_id || null,
       service_name: payload.service_name || payload.service || null,
       method: payload.method || null,
-      path: payload.path || payload.endpoint || null
-    })]
+      path: payload.path || payload.endpoint || null,
+      http_status: getHttpStatus(payload),
+      latency_ms: getLatencyMs(payload)
+    }), getLatencyMs(payload)]
   );
 }
 
@@ -406,6 +454,27 @@ function safeJson(value) {
   } catch {
     return JSON.stringify({ message: 'raw payload could not be serialized' });
   }
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}
+
+function getLatencyMs(payload = {}) {
+  return numberOrNull(
+    payload.latency_ms ?? payload.response_time_ms ?? payload.duration_ms ?? payload.elapsed_ms ??
+    payload.raw?.latency_ms ?? payload.raw?.response_time_ms ?? payload.raw?.duration_ms ?? payload.raw?.elapsed_ms ??
+    payload.raw?.analytics?.latency_ms
+  ) || 0;
+}
+
+function getHttpStatus(payload = {}) {
+  return numberOrNull(payload.http_status ?? payload.status_code ?? payload.statusCode ?? payload.raw?.http_status ?? payload.raw?.analytics?.http_status);
+}
+
+function signatureSql(alias = 'le') {
+  return `COALESCE(NULLIF(${alias}.raw->>'error_type',''), NULLIF(${alias}.raw->>'exception',''), NULLIF(${alias}.raw->'payload'->>'errorType',''), NULLIF(${alias}.raw->'analytics'->>'http_status',''), regexp_replace(left(${alias}.message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error')`;
 }
 
 function chunkArray(items, size) {
@@ -575,15 +644,16 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
       const traceValues = [];
       const tracePlaceholders = [];
       traceBatch.forEach((t, idx) => {
-        const base = idx * 7; // 7 bound params per row (latency_ms is hardcoded as 0, not a $N param)
+        const base = idx * 8;
         const payload = t.payload || {};
-        tracePlaceholders.push(`($${base+1}::uuid,$${base+2}::uuid,$${base+3}::uuid,$${base+4}::text,$${base+5}::text,0,COALESCE($${base+6}::timestamptz, now()),$${base+7}::jsonb)`);
+        tracePlaceholders.push(`($${base+1}::uuid,$${base+2}::uuid,$${base+3}::uuid,$${base+4}::text,$${base+5}::text,$${base+6}::int,COALESCE($${base+7}::timestamptz, now()),$${base+8}::jsonb)`);
         traceValues.push(
           env.id,
           t.serviceId || null,
           t.endpointId || null,
           t.traceId,
           t.status,
+          getLatencyMs(payload),
           t.startedAt || null,
           safeJson({
             event_id: payload.raw?.event_id || payload.event_id || t.traceId,
@@ -592,7 +662,9 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
             service_name: payload.service_name || payload.service || null,
             method: payload.method || null,
             path: payload.path || payload.endpoint || null,
-            rolled_up_events: t.count
+            rolled_up_events: t.count,
+            http_status: getHttpStatus(payload),
+            latency_ms: getLatencyMs(payload)
           })
         );
       });
@@ -604,6 +676,7 @@ export async function bulkCreateLogs(workspaceSlug, environmentName, logs, optio
            service_id=COALESCE(traces.service_id, EXCLUDED.service_id),
            endpoint_id=COALESCE(traces.endpoint_id, EXCLUDED.endpoint_id),
            status=CASE WHEN traces.status='error' OR EXCLUDED.status='error' THEN 'error' ELSE EXCLUDED.status END,
+           latency_ms=GREATEST(COALESCE(traces.latency_ms,0), COALESCE(EXCLUDED.latency_ms,0)),
            started_at=LEAST(traces.started_at, EXCLUDED.started_at),
            meta=traces.meta || EXCLUDED.meta`,
         traceValues
@@ -759,7 +832,9 @@ export async function getTraces(workspaceSlug, environmentName) {
   if (!env) return [];
   if (!hasDatabase) return [];
   const result = await query(
-    `SELECT t.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
+    `SELECT t.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path,
+              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END, CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END, 0) AS latency_ms,
+              COALESCE(le.raw->>'http_status', le.raw->'analytics'->>'http_status') AS http_status
      FROM traces t
      LEFT JOIN services s ON s.id=t.service_id
      LEFT JOIN endpoints ep ON ep.id=t.endpoint_id
@@ -771,12 +846,102 @@ export async function getTraces(workspaceSlug, environmentName) {
   return result.rows;
 }
 
+
+export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env || !traceId) return { trace: null, events: [], waterfall: [] };
+  if (!hasDatabase) return { trace: null, events: [] };
+  const trace = await query(
+    `SELECT t.*, s.name service_name, ep.method, ep.path
+     FROM traces t
+     LEFT JOIN services s ON s.id=t.service_id
+     LEFT JOIN endpoints ep ON ep.id=t.endpoint_id
+     WHERE t.environment_id=$1 AND t.trace_id=$2`, [env.id, traceId]);
+  const events = await query(
+    `SELECT le.id, le.timestamp, le.severity, le.trace_id, le.message, le.raw,
+            s.name service_name, ep.method, ep.path,
+            COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END, CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END, 0) AS latency_ms,
+            COALESCE(le.raw->>'http_status', le.raw->'analytics'->>'http_status') AS http_status
+     FROM log_events le
+     LEFT JOIN services s ON s.id=le.service_id
+     LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+     WHERE le.environment_id=$1 AND (le.trace_id=$2 OR le.raw->>'event_id'=$2 OR le.raw->>'correlation_id'=$2 OR le.raw->>'transaction_id'=$2)
+     ORDER BY le.timestamp ASC LIMIT 300`, [env.id, traceId]);
+  const first = events.rows[0]?.timestamp ? new Date(events.rows[0].timestamp).getTime() : Date.now();
+  const waterfall = events.rows.map((e, idx) => ({
+    step: idx + 1,
+    at_ms: Math.max(0, new Date(e.timestamp).getTime() - first),
+    service_name: e.service_name,
+    method: e.method,
+    path: e.path,
+    severity: e.severity,
+    latency_ms: e.latency_ms || 0,
+    message: e.message
+  }));
+  return { trace: trace.rows[0] || null, events: events.rows, waterfall };
+}
+
+export async function getErrorGroups(workspaceSlug, environmentName, filters = {}) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return [];
+  if (!hasDatabase) return [];
+  const values = [env.id];
+  const where = [`le.environment_id=$1`, `le.severity IN ('ERROR','FATAL')`];
+  const add = (sql, value) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
+  if (filters.service) add('s.name = ?', String(filters.service));
+  if (filters.path) add('ep.path = ?', String(filters.path));
+  if (filters.range && filters.range !== 'all') {
+    const interval = filters.range === '1h' ? '1 hour' : filters.range === '7d' ? '7 days' : filters.range === '30d' ? '30 days' : '24 hours';
+    where.push(`le.timestamp >= now() - interval '${interval}'`);
+  }
+  const sig = signatureSql('le');
+  const result = await query(
+    `SELECT ${sig} AS signature,
+            count(*)::int AS occurrences,
+            max(le.timestamp) AS last_seen,
+            min(le.timestamp) AS first_seen,
+            array_remove(array_agg(DISTINCT s.name), NULL)[1:5] AS services,
+            array_remove(array_agg(DISTINCT ep.path), NULL)[1:5] AS endpoints,
+            max(le.message) AS sample_message
+     FROM log_events le
+     LEFT JOIN services s ON s.id=le.service_id
+     LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+     WHERE ${where.join(' AND ')}
+     GROUP BY signature
+     ORDER BY occurrences DESC, last_seen DESC
+     LIMIT 25`, values);
+  return result.rows;
+}
+
+export async function getDeployImpact(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env || !hasDatabase) return [];
+  const result = await query(
+    `WITH uploads AS (
+       SELECT id, source_name, created_at FROM ingestion_jobs
+       WHERE environment_id=$1 AND source_type='UPLOAD' AND status IN ('completed','healthy')
+       ORDER BY created_at DESC LIMIT 10
+     ), metrics AS (
+       SELECT u.id, u.source_name, u.created_at,
+              count(le.id) FILTER (WHERE le.timestamp < u.created_at)::int before_logs,
+              count(le.id) FILTER (WHERE le.timestamp >= u.created_at)::int after_logs,
+              COALESCE(100.0 * count(le.id) FILTER (WHERE le.timestamp < u.created_at AND le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.id) FILTER (WHERE le.timestamp < u.created_at),0),0)::numeric(7,2) before_error_rate,
+              COALESCE(100.0 * count(le.id) FILTER (WHERE le.timestamp >= u.created_at AND le.severity IN ('ERROR','FATAL')) / NULLIF(count(le.id) FILTER (WHERE le.timestamp >= u.created_at),0),0)::numeric(7,2) after_error_rate
+       FROM uploads u
+       LEFT JOIN log_events le ON le.environment_id=$1 AND le.timestamp >= u.created_at - interval '24 hours' AND le.timestamp < u.created_at + interval '24 hours'
+       GROUP BY u.id, u.source_name, u.created_at
+     ) SELECT *, (after_error_rate-before_error_rate)::numeric(7,2) AS error_delta_pct FROM metrics ORDER BY created_at DESC`, [env.id]);
+  return result.rows;
+}
+
 export async function getAlerts(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return [];
   if (!hasDatabase) return [];
   const result = await query(
-    `SELECT a.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path
+    `SELECT a.*, CASE WHEN s.name ~* '\.xml(:[0-9]+)?$' THEN NULL ELSE s.name END service_name, ep.method, ep.path,
+              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END, CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END, 0) AS latency_ms,
+              COALESCE(le.raw->>'http_status', le.raw->'analytics'->>'http_status') AS http_status
      FROM alerts a
      LEFT JOIN services s ON s.id=a.service_id
      LEFT JOIN endpoints ep ON ep.id=a.endpoint_id
