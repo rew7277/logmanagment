@@ -103,12 +103,55 @@ function routeMetric(action, m={}){
 function renderOverviewPulse(m){
   const metricsEl=$('metrics'); if(!metricsEl) return;
   let pulse=$('overviewPulse');
-  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card'; metricsEl.insertAdjacentElement('afterend',pulse); }
-  const err=Math.min(100,Number(m.error_rate||0));
-  const spike=Math.min(100,Number(m.error_spike_percent||0));
-  const lat=Math.min(100,(Number(m.p95_latency_ms||0)/2000)*100);
-  const thr=Math.min(100,(Number(m.throughput_1h||0)/10000)*100);
-  pulse.innerHTML=`<div class="section-head"><h3>Operational pulse</h3><span>Error spike / latency / throughput</span></div><div class="pulse-grid">${pulseBar('Error rate',err,Number(m.error_rate||0).toFixed(2)+'%',err>5?'bad':err>1?'warn':'good')}${pulseBar('Spike growth',spike,Number(m.error_spike_percent||0).toFixed(2)+'%',spike>50?'bad':spike>0?'warn':'good')}${pulseBar('P95 latency',lat,fmtMs(m.p95_latency_ms||0),lat>50?'bad':lat>20?'warn':'good')}${pulseBar('Throughput 1h',thr,fmt(m.throughput_1h||0),'neutral')}</div><div class="ai-insight"><b>AI investigation hint</b><span>${esc(buildInsight(m))}</span></div>`;
+  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card visual-pulse'; metricsEl.insertAdjacentElement('afterend',pulse); }
+  const errRate=Number(m.error_rate||0);
+  const spikePct=Number(m.error_spike_percent||0);
+  const p95=Number(m.p95_latency_ms||0);
+  const throughput=Number(m.throughput_1h||0);
+  const recentErr=Number(m.recent_errors_1h||0);
+  const prevErr=Number(m.previous_errors_1h||0);
+  const errPct=Math.min(100,errRate);
+  const spikeNorm=Math.min(100,Math.max(0,spikePct));
+  const latPct=Math.min(100,(p95/2000)*100);
+  const thrPct=Math.min(100,(throughput/10000)*100);
+  const maxErr=Math.max(1,recentErr,prevErr);
+  const prevW=Math.max(3,Math.round((prevErr/maxErr)*100));
+  const recentW=Math.max(3,Math.round((recentErr/maxErr)*100));
+  const risk=Math.min(100,Math.round((errPct*1.8)+(spikeNorm*.45)+(latPct*.35)));
+  const riskTone=risk>70?'bad':risk>35?'warn':'good';
+  pulse.innerHTML=`
+    <div class="section-head"><h3>Operational pulse</h3><span>Visual health from error spike / latency / throughput</span></div>
+    <div class="pulse-visual-grid">
+      ${pulseGauge('Error rate', errPct, errRate.toFixed(2)+'%', errRate>5?'bad':errRate>1?'warn':'good', 'Click to open ERROR logs', 'errors')}
+      ${pulseGauge('Spike growth', spikeNorm, spikePct.toFixed(2)+'%', spikePct>50?'bad':spikePct>0?'warn':'good', 'Click to open latest spike logs', 'spike')}
+      ${pulseGauge('P95 latency', latPct, fmtMs(p95), latPct>50?'bad':latPct>20?'warn':'good', 'Click to inspect slow traces', 'latency')}
+      ${pulseGauge('Throughput 1h', thrPct, fmt(throughput), 'neutral', 'Click to view last-hour log stream', 'throughput')}
+    </div>
+    <div class="pulse-analytics-grid">
+      <button class="pulse-compare" data-metric-action="spike">
+        <div><b>Error comparison</b><span>Previous 1h vs latest 1h</span></div>
+        <div class="compare-row"><small>Previous</small><i><em style="width:${prevW}%"></em></i><strong>${fmt(prevErr)}</strong></div>
+        <div class="compare-row danger"><small>Latest</small><i><em style="width:${recentW}%"></em></i><strong>${fmt(recentErr)}</strong></div>
+      </button>
+      <button class="pulse-risk ${riskTone}" data-metric-action="top-error">
+        <div><b>Risk compass</b><span>Combined operational pressure</span></div>
+        <div class="risk-meter"><i style="width:${Math.max(4,risk)}%"></i></div>
+        <strong>${risk}/100</strong>
+      </button>
+      <button class="pulse-top-error" data-metric-action="top-error">
+        <div><b>Dominant error</b><span>${fmt(m.top_error_count||0)} events</span></div>
+        <p title="${esc(String(m.top_error_signature||'No errors observed'))}">${esc(String(m.top_error_signature||'No errors observed'))}</p>
+      </button>
+    </div>
+    <div class="ai-insight"><b>AI investigation hint</b><span>${esc(buildInsight(m))}</span></div>`;
+  $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeFromMetric(btn.dataset.metricAction,m));
+}
+function pulseGauge(label,pct,value,tone,hint,action){
+  const safePct=Math.max(0,Math.min(100,Number(pct||0)));
+  return `<button class="pulse-gauge ${tone}" data-metric-action="${esc(action)}" title="${esc(hint)}">
+    <div class="gauge-ring" style="--pct:${safePct}"><span>${esc(value)}</span></div>
+    <div><b>${esc(label)}</b><small>${esc(hint)}</small></div>
+  </button>`;
 }
 function pulseBar(label,pct,value,tone){return `<div class="pulse-item ${tone}"><div><b>${esc(label)}</b><span>${esc(value)}</span></div><div class="pulse-track"><i style="width:${Math.max(3,Math.min(100,pct))}%"></i></div></div>`;}
 function buildInsight(m){
