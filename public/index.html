@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ObserveX | Production Log Observability Command Center</title>
-  <link rel="stylesheet" href="/styles.css?v=20260506-v43" />
+  <title>ObserveX | Environment Observability SaaS</title>
+  <link rel="stylesheet" href="/styles.css?v=20260506-v36" />
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -24,48 +24,20 @@
       <div class="nav-title">Environment Pages</div>
       <nav class="nav" aria-label="Environment pages">
         <a class="nav-item active" href="#overview" data-page-link="overview"><span class="icon" data-icon="overview"></span><span class="label">Overview</span></a>
-        <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">Ask AI RCA</span></a>
-        <a class="nav-item" href="#settings" data-page-link="settings"><span class="icon" data-icon="settings"></span><span class="label">Settings</span></a>
-        <a class="nav-item" href="#auditLogs" data-page-link="auditLogs"><span class="icon" data-icon="audit"></span><span class="label">Audit Logs</span></a>
-        <button id="appSignOutBtn" class="nav-item signout-item" type="button"><span class="icon">⎋</span><span class="label">Sign Out</span></button>
+        <a class="nav-item" href="#apis" data-page-link="apis"><span class="icon" data-icon="apis"></span><span class="label">APIs &amp; Endpoints</span></a>
+        <a class="nav-item" href="#logs" data-page-link="logs"><span class="icon" data-icon="logs"></span><span class="label">Log Search</span></a>
+        <a class="nav-item" href="#uploads" data-page-link="uploads"><span class="icon" data-icon="uploads"></span><span class="label">Upload History</span></a>
+        <a class="nav-item" href="#alerts" data-page-link="alerts"><span class="icon" data-icon="alerts"></span><span class="label">Alerts</span></a>
+        <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon" data-icon="ops"></span><span class="label">Ops</span></a>
+        <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">AI RCA</span></a>
+        <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon" data-icon="docs"></span><span class="label">API Docs</span></a>
       </nav>
       <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
     </aside>
     <main class="content">
       <header class="topbar"><div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div><div class="top-actions" id="topActions"><button id="askRcaBtn">Ask AI RCA</button></div></header>
-      <section class="page active" data-page="overview">
-        <div class="overview-command-top single-command-center">
-          <div>
-            <p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p>
-            <h1>Production Log Observability – Command Center</h1>
-            <p class="command-subtitle">Dashboard values are calculated only from ingested logs/traces for the selected environment.</p>
-          </div>
-          <div class="overview-controls">
-            <span class="env-status-pill" id="overviewEnvBadge">PROD</span>
-            <label class="range-select"><span>Time range</span><select id="overviewRange"><option value="1h">Last 1h</option><option value="4h">Last 4h</option><option value="24h" selected>Last 24h</option><option value="7d">Last 7d</option></select></label>
-            <label class="range-select env-picker"><span>Environment</span><select id="overviewEnvSelect"><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select></label>
-          </div>
-        </div>
-
-        <div class="prod-safe-banner" id="prodSafeBanner">No incidents detected in PROD. Continue monitoring or upload logs for deeper analysis.</div>
-
-        <section class="cards-5 command-metrics-grid" id="metrics"></section>
-        <section id="overviewPulse" class="overview-pulse card visual-pulse v41-pulse"></section>
-
-        <section class="overview-deep-grid command-lower-grid">
-          <div class="overview-main-stack">
-            <div class="card upload-card">
-              <div class="section-head"><h3>Environment Log Upload</h3><span>Reusable for Log Search, RCA and Endpoint Analytics</span></div>
-              <div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" multiple hidden /><div class="drop-icon">⇩</div><strong>Drop one or many log files here, or click to choose</strong><small>Batch upload raw logs, JSONL, JSON arrays or pretty JSON. Each file is tracked separately and parsed in the background.</small></div>
-              <textarea id="logUpload" placeholder="Or paste JSONL / raw logs here..." rows="5"></textarea>
-              <div class="upload-actions"><button id="uploadBtn">Upload to selected environment</button><button id="clearLogsBtn" class="danger-subtle" type="button">🗑 Clear environment</button><span id="uploadStatus"></span></div>
-              <div class="ingest-progress" id="ingestProgress" hidden><div class="ingest-top"><div><strong id="ingestStage">Ready</strong><small id="ingestMeta">Waiting for upload</small></div><b id="ingestPercent">0%</b></div><div class="progress-track"><div id="ingestBar" class="progress-bar"></div></div><div class="ingest-stats"><span id="ingestParsed">0 parsed</span><span id="ingestInserted">0 inserted</span><span id="ingestSpeed">0 logs/sec</span></div><div id="ingestTelemetry" hidden style="margin:4px 0"></div><div id="ingestError" class="ingest-error" hidden></div></div>
-            </div>
-            <section class="card architecture-card"><div class="section-head"><h3>Data Architecture</h3><span>Single source of truth</span></div><div class="arch-flow"><div title="Raw logs & traces">Upload / API Ingestion<small>Raw logs & traces</small></div><span>→</span><div title="Structured log parsing">Parser & Normalizer<small>Structured parsing</small></div><span>→</span><div title="Service/endpoint mapping">Service + Endpoint Detection<small>Auto mapping</small></div><span>→</span><div title="Long-term storage">Log Store<small>Single source</small></div><span>→</span><div title="Search, RCA, endpoint analytics">Search / RCA / Analytics<small>Investigation</small></div></div></section>
-          </div>
-          <aside class="card premium-summary env-summary-side"><div class="section-head"><h3 id="summaryEnv">Environment Summary – PROD</h3><span>Production mode</span></div><div class="kv-grid" id="summaryGrid"></div><p class="prod-caution">This environment is running in production mode. Proceed with caution when changing settings.</p></aside>
-        </section>
-      </section>
+      <section class="page active" data-page="overview"><div class="env-command-card"><div><span class="eyebrow"><span class="dot"></span> Select environment</span><h3>Environment command center</h3><p>Choose one environment. Uploads, APIs, endpoints, RCA and log search stay isolated.</p></div><div class="env-buttons" id="envButtons"></div></div><div class="hero-card"><div><h1><span id="heroEnv">PROD</span> log observability command center</h1><p>Dashboard values are calculated only from ingested logs/traces for the selected environment.</p></div><div class="health-widget"><div class="score-ring" id="scoreRing">--</div><small>Health score</small></div></div><section class="cards-5" id="metrics"></section><section class="grid-2"><div class="card upload-card"><div class="section-head"><h3>Environment Log Upload</h3><span>Reusable for Log Search, RCA and Endpoint Analytics</span></div><div id="dropZone" class="drop-zone"><input id="fileInput" type="file" accept=".log,.txt,.json,.jsonl" multiple hidden /><div class="drop-icon">⇩</div><strong>Drop one or many log files here, or click to choose</strong><small>Batch upload raw logs, JSONL, JSON arrays or pretty JSON. Each file is tracked separately and parsed in the background.</small></div><textarea id="logUpload" placeholder="Or paste JSONL / raw logs here..." rows="5"></textarea><div class="upload-actions"><button id="uploadBtn">Upload to selected environment</button><button id="clearLogsBtn" class="danger-subtle" type="button">🗑 Clear environment</button><span id="uploadStatus"></span></div><div class="ingest-progress" id="ingestProgress" hidden><div class="ingest-top"><div><strong id="ingestStage">Ready</strong><small id="ingestMeta">Waiting for upload</small></div><b id="ingestPercent">0%</b></div><div class="progress-track"><div id="ingestBar" class="progress-bar"></div></div><div class="ingest-stats"><span id="ingestParsed">0 parsed</span><span id="ingestInserted">0 inserted</span><span id="ingestSpeed">0 logs/sec</span></div><div id="ingestTelemetry" hidden style="margin:4px 0"></div>
+      <div id="ingestError" class="ingest-error" hidden></div></div></div><div class="card premium-summary"><div class="section-head"><h3>Environment Summary</h3><span id="summaryEnv">PROD only</span></div><div class="kv-grid" id="summaryGrid"></div></div></section><section class="card architecture-card"><div class="section-head"><h3>Data Architecture</h3><span>Single source of truth</span></div><div class="arch-flow"><div>Upload / API Ingestion</div><span>→</span><div>Parser & Normalizer</div><span>→</span><div>Service + Endpoint Detection</div><span>→</span><div>Log Store</div><span>→</span><div>Search / RCA / Analytics</div></div></section></section>
       <section class="page" data-page="apis">
         <div class="card api-endpoints-card">
           <div class="section-head">
@@ -137,43 +109,6 @@
         </div>
       </section>
       <section class="page" data-page="rca"><div class="grid-2"><div class="card ai-card"><div class="section-head"><h3>AI RCA</h3><span class="badge">Selected env only</span></div><div id="rcaContent"><div class="insight"><h4>Ready</h4><p>Run RCA from selected environment data.</p></div></div></div><div class="card"><div class="section-head"><h3>RCA Query</h3><span>Environment scoped</span></div><div class="rca-quick" id="rcaQuickPrompts"></div><textarea id="rcaQuery" rows="8" placeholder="Example: Analyze payment timeout errors for last 24 hours"></textarea><button id="rcaPageBtn">Run RCA</button></div></div></section>
-      <section class="page" data-page="settings">
-        <div class="settings-workspace-panel">
-          <div class="card settings-hero"><div><p class="eyebrow"><span class="dot"></span> Admin only</p><h2>Organization & Environment Settings</h2><p>Workspace-scoped settings, RBAC, invitations, and audit history stay inside this app.</p></div><button class="secondary" type="button" id="settingsBackOverview">Back to Overview</button></div>
-          <div class="settings-grid">
-            <div class="card settings-card"><div class="section-head"><h3>General</h3><span>Organization-level controls</span></div><div class="form-grid two"><label>Organization name<input id="settingsOrgName" placeholder="FSBL Production Ops"/></label><label>Default timezone<select id="settingsTimezone"><option>Asia/Kolkata</option><option>UTC</option><option>Asia/Singapore</option></select></label><label>Currency<select id="settingsCurrency"><option>INR</option><option>USD</option><option>SGD</option></select></label><label>Default invite role<select id="settingsDefaultRole"><option>VIEWER</option><option>TESTER</option><option>DEVELOPER</option><option>OPS</option></select></label></div><div class="branding-row"><div class="logo-preview">OX</div><label>Primary color<input id="settingsPrimaryColor" type="color" value="#335cff"/></label></div><button class="save-view-action settings-save" type="button">Save settings</button></div>
-            <div class="card settings-card"><div class="section-head"><h3>Roles & Permissions</h3><span>Animated RBAC matrix</span></div><div class="role-matrix"><div><b>Role</b><b>Dashboard</b><b>Upload</b><b>Delete</b><b>AI RCA</b><b>Manage Users</b></div><div><span>ADMIN</span><input type="checkbox" checked><input type="checkbox" checked><input type="checkbox" checked><input type="checkbox" checked><input type="checkbox" checked></div><div><span>OPS</span><input type="checkbox" checked><input type="checkbox" checked><input type="checkbox"><input type="checkbox" checked><input type="checkbox"></div><div><span>DEVELOPER</span><input type="checkbox" checked><input type="checkbox" checked><input type="checkbox"><input type="checkbox" checked><input type="checkbox"></div><div><span>VIEWER</span><input type="checkbox" checked><input type="checkbox"><input type="checkbox"><input type="checkbox"><input type="checkbox"></div></div></div>
-            <div class="card settings-card"><div class="section-head"><h3>Invitation Codes</h3><span>One-time / time-bound access</span></div><div class="invite-actions"><select><option>VIEWER</option><option>TESTER</option><option>DEVELOPER</option><option>OPS</option></select><select><option>Expires in 7 days</option><option>Expires in 24 hours</option><option>One-time only</option></select><button type="button">Generate code</button></div><div class="audit-table compact"><div><b>Code</b><b>Role</b><b>Status</b><b>Action</b></div><div><span>OX-PROD-9K2M</span><span>OPS</span><span>Unused</span><button class="secondary tiny">Copy</button></div><div><span>OX-UAT-2F7A</span><span>VIEWER</span><span>Used</span><button class="secondary tiny">Download</button></div></div></div>
-            <div class="card settings-card"><div class="section-head"><h3>Audit Logs</h3><span>Admin / OPS visibility</span></div><div class="audit-filters"><select><option>All events</option><option>Login</option><option>Role change</option><option>Upload</option></select><input placeholder="Filter actor or target"/></div><div class="audit-table"><div><b>Timestamp</b><b>Actor</b><b>Action</b><b>Status</b></div><div><span>Today</span><span>admin@observex</span><span>Settings viewed</span><span>Success</span></div><div><span>Today</span><span>system</span><span>Upload parsed</span><span>Success</span></div></div></div>
-            <div class="card settings-card"><div class="section-head"><h3>Custom Environment Creation</h3><span>ADMIN-only</span></div><div class="form-grid two"><label>Environment name<input placeholder="PROD-EU / PROD-US / PERF"/></label><label>Region / data center<input placeholder="Mumbai / Hyderabad / EU-West"/></label></div><label>Description<textarea rows="3" placeholder="Purpose, ownership, and routing notes"></textarea></label><button type="button" class="secondary">Create custom environment</button></div>
-            <div class="card settings-card"><div class="section-head"><h3>Environment Policies</h3><span>Retention, rate limit, PII masking</span></div><div class="form-grid two"><label>Retention policy<input placeholder="90 days" title="How long logs are retained"/></label><label>Rate limit<input placeholder="10,000 logs / minute" title="Max ingestion volume for this environment"/></label></div><label class="clean-check"><input type="checkbox" checked/><span>Enable PII masking</span></label><div class="policy-pills"><span>Email</span><span>Phone</span><span>Token</span><span>Account number</span></div><button type="button" class="secondary">Save environment policy</button></div>
-          </div>
-        </div>
-      </section>
-      <section class="page" data-page="auditLogs">
-        <div class="card audit-hero-card">
-          <div>
-            <p class="eyebrow"><span class="dot"></span> ADMIN only</p>
-            <h2>Audit Logs – Organization Level</h2>
-            <p>Track critical organization and environment operations without leaving the workspace.</p>
-          </div>
-          <span class="secure-chip">🔒 Admin / OPS visibility</span>
-        </div>
-        <div class="card audit-visual-card">
-          <div class="section-head"><h3>Event activity</h3><span>Events per hour / top event types</span></div>
-          <div id="auditVisual" class="audit-visual-empty">Audit event visualization will appear after data loads.</div>
-        </div>
-        <div class="card audit-page-card">
-          <div class="section-head"><h3>Organization activity</h3><span>Login, role, invitation, ingestion, policy and settings changes</span></div>
-          <div class="audit-searchbar">
-            <input id="auditUserFilter" placeholder="Filter by user, target or details" />
-            <select id="auditEventFilter"><option value="">All event types</option><option>LOGIN</option><option>LOGOUT</option><option>FAILED_LOGIN</option><option>USER_UPDATED</option><option>ROLE_CHANGED</option><option>INVITATION_CREATED</option><option>UPLOAD_STARTED</option><option>UPLOAD_FINISHED</option><option>POLICY_CHANGED</option><option>ENVIRONMENT_CHANGED</option></select>
-            <select id="auditTimeFilter"><option value="24h">Last 24h</option><option value="7d">Last 7d</option><option value="30d">Last 30d</option><option value="all">All time</option></select>
-            <select id="auditEnvFilter"><option value="">All environments</option><option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option></select>
-          </div>
-          <div id="auditLogTable" class="audit-log-table"></div>
-        </div>
-      </section>
       <section class="page" data-page="apiDocs">
         <div class="card api-docs-shell">
           <div class="section-head"><h3>API Documentation & Live Tester</h3><span>Postman-style request console</span></div>
@@ -202,6 +137,6 @@
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260506-v43"></script>
+  <script src="/app.js?v=20260506-v36"></script>
 </body>
 </html>

@@ -334,7 +334,7 @@ router.get('/:workspace/:environment/audit-logs', asyncHandler(async (req, res) 
 
 
 router.get('/:workspace/:environment/overview', asyncHandler(async (req, res) => {
-  const data = await getOverview(normalizeWorkspace(req), normalizeEnvironment(req), req.query.range || '24h');
+  const data = await getOverview(normalizeWorkspace(req), normalizeEnvironment(req));
   res.json({ data });
 }));
 
