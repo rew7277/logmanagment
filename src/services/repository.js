@@ -1059,7 +1059,9 @@ function buildTopologyResponse(rows) {
     if (path) return `${method || 'ANY'} ${path}`;
     return clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
   };
-  const endpointId = (label) => `endpoint::${label}`;
+  const serviceOf = (r) => clean(r.service_name || r.raw?.service_name || r.raw?.service || r.raw?.app_name || r.raw?.analytics?.application_name || 'observed-api');
+  // Include service/API name in endpoint id so same path under different APIs never gets merged.
+  const endpointId = (service, label) => `endpoint::${service}::${label}`;
   const dependencyId = (label) => `dependency::${label}`;
   const isError = (r) => {
     const sev = String(r.severity || '').toUpperCase();
@@ -1108,7 +1110,8 @@ function buildTopologyResponse(rows) {
   };
 
   const ensureNode = (id, label, extra={}) => {
-    const n = nodeMap.get(id) || { id, label, type: extra.type || 'endpoint', is_external: !!extra.is_external, calls:0, errors:0, latency:[] };
+    const n = nodeMap.get(id) || { id, label, service: extra.service || '', api_name: extra.service || '', type: extra.type || 'endpoint', is_external: !!extra.is_external, calls:0, errors:0, latency:[] };
+    if (extra.service && !n.service) { n.service = extra.service; n.api_name = extra.service; }
     if (extra.bump !== false) n.calls += 1;
     if (extra.error) n.errors += 1;
     if (extra.latency_ms > 0) n.latency.push(Number(extra.latency_ms));
@@ -1132,10 +1135,11 @@ function buildTopologyResponse(rows) {
   // Endpoint-only model: every observed API endpoint becomes a node. Edges are created only when logs explicitly mention a downstream API/URL.
   // This avoids fake chains between unrelated endpoints that happen to share a missing/default trace id.
   rows.forEach((r) => {
+    const service = serviceOf(r);
     const label = endpointLabel(r);
     if (!label || label === 'observed-api') return;
-    const id = endpointId(label);
-    ensureNode(id, label, { type:'endpoint', error:isError(r), latency_ms:latency(r) });
+    const id = endpointId(service, label);
+    ensureNode(id, label, { service, type:'endpoint', error:isError(r), latency_ms:latency(r) });
     for (const dep of extractDownstreams(r)) {
       const did = dependencyId(dep);
       ensureNode(did, dep, { type:'dependency', is_external:true, bump:false });
@@ -1156,6 +1160,8 @@ function buildTopologyResponse(rows) {
       id:n.id,
       label:n.label,
       type:n.type,
+      service:n.service || '',
+      api_name:n.api_name || n.service || '',
       is_external:!!n.is_external,
       calls:n.calls,
       error_rate:Number(er.toFixed(2)),

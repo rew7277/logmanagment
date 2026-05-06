@@ -1423,10 +1423,12 @@ function applyTopoScope(apiName){
   }
   // Find nodes belonging to this API
   // Match by: node.service === apiName, or node.id contains apiName, or label matches
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const apiNorm=norm(apiName);
   const matchNode=n=>{
-    if(n.service && n.service===apiName) return true;
-    if(n.id && (n.id.startsWith(apiName+':') || n.id===apiName)) return true;
-    // label match: "POST /path" style — check if any edge connects them to this API
+    if(n.isExternal) return false;
+    if(norm(n.service)===apiNorm || norm(n.api_name)===apiNorm) return true;
+    if(n.id && (norm(n.id).startsWith('endpoint::'+apiNorm+'::') || norm(n.id)===apiNorm || norm(n.id).includes('::'+apiNorm+'::'))) return true;
     return false;
   };
 
@@ -1438,8 +1440,7 @@ function applyTopoScope(apiName){
     const toNode=topoAllNodes.find(n=>n.id===e.to);
     if(!fromNode||!toNode) return false;
     // Include edge if from-node belongs to API, or if it's an internal-to-internal edge of the API
-    return matchNode(fromNode) || (fromNode.service===apiName) ||
-           (e.from===apiName) || (e.to===apiName);
+    return matchNode(fromNode);
   });
 
   // If no edges matched by service, fall back: include edges where from or to label matches apiName
@@ -1449,14 +1450,14 @@ function applyTopoScope(apiName){
       return fromNode && (fromNode.label.includes(apiName)||fromNode.id.includes(apiName));
     });
   }
-  // If still nothing, include all edges (API may not have service tagging)
-  if(!scopedEdges.length) scopedEdges=[...topoAllEdges];
+  // If still nothing, do NOT fall back to all edges; keep only the selected API's orphan endpoints.
+  // Falling back to all edges is what caused one API topology to mix with every other API.
 
   // Collect all node IDs referenced by scoped edges
   const scopedIds=new Set([...scopedEdges.map(e=>e.from), ...scopedEdges.map(e=>e.to)]);
 
-  // Also include all nodes belonging to this API even if orphaned
-  topoAllNodes.filter(n=>matchNode(n)||n.id===apiName).forEach(n=>scopedIds.add(n.id));
+  // Also include all endpoints belonging to this API even if no downstream dependency was found.
+  topoAllNodes.filter(n=>matchNode(n)).forEach(n=>scopedIds.add(n.id));
 
   topoNodes=topoAllNodes.filter(n=>scopedIds.has(n.id));
   topoEdges=scopedEdges;
@@ -1765,8 +1766,8 @@ async function initTopo(){
     const apiName=state.topoHighlight;
     state.topoHighlight=null;
     // Check if it's an API name (not an endpoint label)
-    const matchingApi=topoAllNodes.find(n=>n.id===apiName||n.label===apiName||
-      n.id.startsWith(apiName+':')||n.service===apiName);
+    const matchingApi=topoAllNodes.find(n=>n.service===apiName||n.api_name===apiName||
+      n.id===apiName||n.id.startsWith('endpoint::'+apiName+'::')); 
     if(matchingApi){
       topoSelected=matchingApi.id;
       scopeTopoToApi(apiName);
