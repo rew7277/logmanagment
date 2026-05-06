@@ -50,17 +50,24 @@ function setPage(page){
   state.page=(page==='traces'?'logs':(page==='endpoints'?'apis':(page||'overview')));
   $$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));
   $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));
-  const titles={overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs'};
-  setText('pageTitle',titles[state.page]||'Overview');
-  $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
+  const titles={
+    overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',
+    uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',
+    apiDocs:'API Docs',topology:'Service Topology',liveLogs:'Live Logs',settings:'Settings'
+  };
+  setText('pageTitle',titles[state.page]||'ObserveX');
+  $('topActions')&&$('topActions').classList.toggle('visible',!['logs','settings','topology','liveLogs'].includes(state.page));
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
-  if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
-  if(state.page==='apis')    { loadApisEndpoints(); }
-  if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
-  if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
-  if(state.page==='ops') { loadAlertsOps(); }
-  if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
+  if(state.page==='logs')     { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
+  if(state.page==='apis')     { loadApisEndpoints(); }
+  if(state.page==='uploads')  { loadUploadHistory(); loadDeployImpact(); }
+  if(state.page==='alerts')   { loadAlertsOps(); loadAlertRules(); }
+  if(state.page==='ops')      { loadAlertsOps(); }
+  if(state.page==='apiDocs')  { renderApiDoc('apiIngest'); }
+  if(state.page==='topology') { setTimeout(initTopo,100); }
+  if(state.page==='liveLogs') { liveStartTime=Date.now(); setTimeout(()=>{startLiveLogs();bindLiveLogs();},80); }
+  if(state.page==='settings') { setTimeout(()=>{initSettings();loadSettingsTab('profile');},50); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
@@ -218,7 +225,7 @@ async function loadApisEndpoints(q){
           </div>
         </button>
         <div class="api-accordion-body"><div class="api-accordion-body-inner"><div class="api-manage-row"><button class="mini-link danger delete-api" data-service="${esc(s.name)}">Delete API</button><span>Manual delete hides this API/endpoint from the selected environment.</span></div>
-          ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><span><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button><button class="mini-link danger delete-endpoint" data-service="${esc(s.name)}" data-method="${esc(meth)}" data-path="${esc(ep.path||'')}">Delete</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
+          ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><div class="ep-action-cell"><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">Errors →</button><button class="mini-link danger delete-endpoint" data-service="${esc(s.name)}" data-method="${esc(meth)}" data-path="${esc(ep.path||'')}">Delete</button></div></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
         </div></div>
       </div>`;
     }).join('');
@@ -867,3 +874,762 @@ async function deleteApiRegistry(payload){
 function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
+
+/* ═══════════════════════════════════════════════════════════
+   v36 ADDITIONS — Auth guard, Settings, Topology, Live Logs,
+   RBAC, Notifications, Approvals, Delete endpoints, etc.
+   ═══════════════════════════════════════════════════════════ */
+
+// ── AUTH GUARD ──
+function getSession(){try{return JSON.parse(sessionStorage.getItem('ox_session'));}catch{return null;}}
+function guardAuth(){
+  const sess=getSession();
+  if(!sess){ window.location.href='/login.html'; return false; }
+  return sess;
+}
+function renderUserChip(sess){
+  const chip=$('userChip'); if(!chip) return;
+  chip.hidden=false;
+  const av=$('userAvatar'); if(av) av.textContent=(sess.name||'?')[0].toUpperCase();
+  const nm=$('userChipName'); if(nm) nm.textContent=sess.name||sess.email;
+  const rl=$('userChipRole'); if(rl) rl.textContent=(sess.role||'viewer').charAt(0).toUpperCase()+(sess.role||'viewer').slice(1);
+  chip.onclick=()=>setPage('settings');
+}
+
+// ── ICONS EXTENDED ──
+const iconsExtra={
+  topology:'<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M8.5 17.5l3-4.5 4.5 4.5M5.5 17.5 12 11"/></svg>',
+  live:'<svg viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 8 0"/><path d="M4.5 8.5a10 10 0 0 1 15 0"/><path d="M1 5a14.5 14.5 0 0 1 22 0"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
+  settings:'<svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+};
+
+// ── STORAGE HELPERS ──
+function getUsers(){try{return JSON.parse(localStorage.getItem('ox_users')||'[]');}catch{return[];}}
+function saveUsers(u){localStorage.setItem('ox_users',JSON.stringify(u));}
+function getInviteCodes(){try{return JSON.parse(localStorage.getItem('ox_invite_codes')||'["OX-INIT-2026"]');}catch{return['OX-INIT-2026'];}}
+function saveInviteCodes(c){localStorage.setItem('ox_invite_codes',JSON.stringify(c));}
+function getNotifChannels(){try{return JSON.parse(localStorage.getItem('ox_notif_channels')||'[]');}catch{return[];}}
+function saveNotifChannels(c){localStorage.setItem('ox_notif_channels',JSON.stringify(c));}
+function getApprovals(){try{return JSON.parse(localStorage.getItem('ox_approvals')||'[]');}catch{return[];}}
+function saveApprovals(a){localStorage.setItem('ox_approvals',JSON.stringify(a));}
+function getAuditLog(){try{return JSON.parse(localStorage.getItem('ox_audit_log')||'[]');}catch{return[];}}
+function addAuditEntry(action,detail,severity='low'){
+  const sess=getSession();
+  const log=getAuditLog();
+  log.unshift({ts:new Date().toISOString(),actor:sess?.email||'system',action,detail,severity});
+  if(log.length>200) log.length=200;
+  localStorage.setItem('ox_audit_log',JSON.stringify(log));
+}
+function getKeyUsage(){try{return JSON.parse(localStorage.getItem('ox_key_usage')||'{}');}catch{return {};}}
+function bumpKeyUsage(keyId){const u=getKeyUsage();u[keyId]=(u[keyId]||0)+Math.floor(Math.random()*12+1);localStorage.setItem('ox_key_usage',JSON.stringify(u));}
+function getIngestKeys(){try{return JSON.parse(localStorage.getItem('ox_ingest_keys')||'[]');}catch{return[];}}
+function saveIngestKeys(k){localStorage.setItem('ox_ingest_keys',JSON.stringify(k));}
+
+// ── SETTINGS TABS ──
+function initSettings(){
+  $$('[data-stab]').forEach(btn=>{
+    btn.onclick=()=>{
+      $$('[data-stab]').forEach(b=>b.classList.remove('active'));
+      $$('[data-stab-panel]').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel=document.querySelector(`[data-stab-panel="${btn.dataset.stab}"]`);
+      if(panel) panel.classList.add('active');
+      loadSettingsTab(btn.dataset.stab);
+    };
+  });
+}
+function loadSettingsTab(tab){
+  if(tab==='profile') loadProfileTab();
+  if(tab==='team') loadTeamTab();
+  if(tab==='invites') loadInvitesTab();
+  if(tab==='apikeys') loadApiKeysTab();
+  if(tab==='keyanalytics') loadKeyAnalytics();
+  if(tab==='notifications') loadNotificationsTab();
+  if(tab==='rbac') loadRbacTab();
+  if(tab==='audit') loadAuditTab();
+  if(tab==='approvals') loadApprovalsTab();
+}
+
+// ── PROFILE ──
+async function hashPwd(password){
+  const enc=new TextEncoder();
+  const buf=await crypto.subtle.digest('SHA-256',enc.encode(password+'observex-salt-2026'));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function loadProfileTab(){
+  const sess=getSession(); if(!sess) return;
+  const f=id=>$(id); if(!f('profileName')) return;
+  f('profileName').value=sess.name||'';
+  f('profileEmail').value=sess.email||'';
+  f('profileRole').value=(sess.role||'viewer').charAt(0).toUpperCase()+(sess.role||'viewer').slice(1);
+  f('profileWorkspace').value=sess.workspace||'';
+}
+function bindProfileSave(){
+  if($('saveProfileBtn')) $('saveProfileBtn').onclick=async()=>{
+    const sess=getSession(); if(!sess) return;
+    const users=getUsers();
+    const idx=users.findIndex(u=>u.email===sess.email);
+    if(idx<0) return;
+    const newName=($('profileName')?.value||'').trim();
+    const oldPwd=$('profileOldPwd')?.value||'';
+    const newPwd=$('profileNewPwd')?.value||'';
+    if(newPwd){
+      if(!oldPwd){ toast('Enter current password to change it','error'); return; }
+      const oldHash=await hashPwd(oldPwd);
+      if(oldHash!==users[idx].hash){ toast('Current password incorrect','error'); return; }
+      users[idx].hash=await hashPwd(newPwd);
+    }
+    if(newName) users[idx].name=newName;
+    saveUsers(users);
+    sess.name=users[idx].name;
+    sessionStorage.setItem('ox_session',JSON.stringify(sess));
+    renderUserChip(sess);
+    addAuditEntry('profile.update','User updated profile');
+    toast('Profile saved','success');
+    if($('profileOldPwd')) $('profileOldPwd').value='';
+    if($('profileNewPwd')) $('profileNewPwd').value='';
+  };
+  if($('logoutBtn')) $('logoutBtn').onclick=()=>{
+    sessionStorage.removeItem('ox_session');
+    addAuditEntry('auth.logout','User signed out');
+    window.location.href='/login.html';
+  };
+}
+
+// ── TEAM ──
+function loadTeamTab(){
+  const users=getUsers(); const el=$('teamMemberList'); if(!el) return;
+  if(!users.length){el.innerHTML='<div class="empty">No users yet. Create the first account via login.</div>';return;}
+  el.innerHTML=users.map(u=>`
+    <div class="team-member-row">
+      <div class="member-avatar">${(u.name||u.email)[0].toUpperCase()}</div>
+      <div><div class="member-name">${esc(u.name||'')}</div><div class="member-email">${esc(u.email)}</div></div>
+      <span class="role-badge ${esc(u.role||'viewer')}">${esc(u.role||'viewer')}</span>
+      <small style="color:var(--muted)">${new Date(u.createdAt||Date.now()).toLocaleDateString()}</small>
+      <button class="secondary" style="padding:6px 10px;font-size:11px" onclick="removeUser('${esc(u.id)}')">Remove</button>
+    </div>`).join('');
+}
+function removeUser(id){
+  const sess=getSession();
+  if(sess?.uid===id){ toast('Cannot remove yourself','error'); return; }
+  if(!confirm('Remove this user?')) return;
+  const users=getUsers().filter(u=>u.id!==id);
+  saveUsers(users);
+  addAuditEntry('team.remove',`Removed user ${id}`,'high');
+  loadTeamTab();
+  toast('User removed','success');
+}
+
+// ── INVITES ──
+function loadInvitesTab(){
+  const codes=getInviteCodes(); const el=$('inviteCodeList'); if(!el) return;
+  if(!codes.length){el.innerHTML='<div class="empty">No active invite codes.</div>';return;}
+  el.innerHTML=`<div class="stg-note" style="margin-bottom:12px">Active codes — share with new teammates. Each code is single-use.</div>`+
+    codes.map((c,i)=>`
+      <div class="invite-code-row">
+        <span class="invite-code-val">${esc(c)}</span>
+        <span style="font-size:11px;color:var(--muted);font-weight:800">Single-use</span>
+        <span class="role-badge member">Member</span>
+        <button class="secondary" style="padding:6px 10px;font-size:11px" onclick="navigator.clipboard.writeText('${esc(c)}').then(()=>toast('Copied!','success'))">Copy</button>
+        <button class="secondary danger" style="padding:6px 10px;font-size:11px" onclick="revokeInvite('${esc(c)}')">Revoke</button>
+      </div>`).join('');
+}
+function revokeInvite(code){
+  const codes=getInviteCodes().filter(c=>c!==code);
+  saveInviteCodes(codes);
+  addAuditEntry('invite.revoke',`Revoked invite code ${code}`,'med');
+  loadInvitesTab();
+  toast('Code revoked','success');
+}
+function bindGenInvite(){
+  if($('genInviteBtn')) $('genInviteBtn').onclick=()=>{
+    const role=$('inviteRoleSelect')?.value||'member';
+    const code=`OX-${Math.random().toString(36).slice(2,6).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+    const codes=getInviteCodes();
+    codes.push(code);
+    saveInviteCodes(codes);
+    addAuditEntry('invite.create',`Generated invite code for role: ${role}`, 'med');
+    loadInvitesTab();
+    toast(`Code: ${code}  (copied)`, 'success');
+    navigator.clipboard.writeText(code).catch(()=>{});
+  };
+}
+
+// ── API KEYS (Settings) ──
+function loadApiKeysTab(){
+  const keys=getIngestKeys(); const el=$('stgKeyList'); if(!el) return;
+  if(!keys.length){el.innerHTML='<div class="empty">No keys yet. Generate one below.</div>';return;}
+  el.innerHTML=keys.map(k=>`
+    <div class="key-card-stg">
+      <div><b>${esc(k.name)}</b><small>${esc(k.id.slice(0,18))}…</small></div>
+      <span class="key-scope">${esc(k.env||'PROD')}</span>
+      <span class="role-badge ${k.role==='full'?'admin':k.role==='read'?'member':'viewer'}">${esc(k.role||'ingest')}</span>
+      <small style="color:var(--muted)">${new Date(k.createdAt||Date.now()).toLocaleDateString()}</small>
+      <button class="secondary danger" style="padding:6px 10px;font-size:11px" onclick="deleteIngestKey('${esc(k.id)}')">Delete</button>
+    </div>`).join('');
+}
+function deleteIngestKey(id){
+  if(!confirm('Delete this API key? It will stop working immediately.')) return;
+  const keys=getIngestKeys().filter(k=>k.id!==id);
+  saveIngestKeys(keys);
+  addAuditEntry('key.delete',`Deleted API key ${id}`,'high');
+  loadApiKeysTab();
+  toast('Key deleted','success');
+}
+function bindStgKeyGen(){
+  if($('stgGenKeyBtn')) $('stgGenKeyBtn').onclick=()=>{
+    const name=($('stgKeyName')?.value||'').trim();
+    if(!name) return toast('Enter a key name','error');
+    const env=$('stgKeyEnv')?.value||'PROD';
+    const role=$('stgKeyRole')?.value||'ingest';
+    const id='ox-'+Array.from(crypto.getRandomValues(new Uint8Array(20))).map(b=>b.toString(16).padStart(2,'0')).join('');
+    const keys=getIngestKeys();
+    keys.push({id,name,env,role,createdAt:Date.now()});
+    saveIngestKeys(keys);
+    if($('stgKeyOutput')) $('stgKeyOutput').textContent=id;
+    if($('stgKeyName')) $('stgKeyName').value='';
+    addAuditEntry('key.create',`Created API key: ${name} (${env})`,'med');
+    loadApiKeysTab();
+    toast('Key generated — copy it now!','success');
+  };
+}
+
+// ── KEY ANALYTICS ──
+function loadKeyAnalytics(){
+  const keys=getIngestKeys(); const usage=getKeyUsage();
+  // Simulate usage bumps
+  keys.forEach(k=>{ if(!usage[k.id]) usage[k.id]=Math.floor(Math.random()*5000+100); });
+  const chartEl=$('keyAnalyticsChart'); const tableEl=$('keyAnalyticsTable');
+  if(!chartEl||!tableEl) return;
+  if(!keys.length){chartEl.innerHTML='<div class="empty">No keys to analyze.</div>';tableEl.innerHTML='';return;}
+  const max=Math.max(1,...keys.map(k=>usage[k.id]||0));
+  chartEl.innerHTML=`<div class="key-usage-bar-wrap">${keys.map(k=>`
+    <div class="key-usage-row">
+      <label title="${esc(k.name)}">${esc(k.name)}</label>
+      <div class="key-bar-track"><div class="key-bar-fill" style="width:${Math.round(((usage[k.id]||0)/max)*100)}%"></div></div>
+      <span class="key-usage-count">${fmt(usage[k.id]||0)}</span>
+    </div>`).join('')}</div>`;
+  tableEl.innerHTML=`<table class="rbac-table"><thead><tr><th>Key Name</th><th>Env</th><th>Role</th><th>Total Calls</th><th>Last 24h</th><th>Created</th></tr></thead><tbody>${
+    keys.map(k=>`<tr><td class="rbac-feature-name">${esc(k.name)}</td><td><span class="key-scope">${esc(k.env||'PROD')}</span></td><td><span class="role-badge ${k.role==='full'?'admin':'member'}">${esc(k.role||'ingest')}</span></td><td><b>${fmt(usage[k.id]||0)}</b></td><td>${fmt(Math.floor((usage[k.id]||0)*0.12))}</td><td>${new Date(k.createdAt||Date.now()).toLocaleDateString()}</td></tr>`).join('')
+  }</tbody></table>`;
+}
+
+// ── NOTIFICATIONS ──
+const notifIcons={slack:'🔔',email:'📧',pagerduty:'🚨',webhook:'🔗',teams:'💬'};
+function renderNotifFields(){
+  const type=$('notifType')?.value||'slack'; const el=$('notifFields'); if(!el) return;
+  const fields={
+    slack:`<input class="notif-url-input" id="notifUrl" placeholder="https://hooks.slack.com/services/..."/>`,
+    email:`<input class="notif-url-input" id="notifUrl" placeholder="alerts@yourcompany.com"/>`,
+    pagerduty:`<input class="notif-url-input" id="notifUrl" placeholder="PagerDuty integration key"/>`,
+    webhook:`<input class="notif-url-input" id="notifUrl" placeholder="https://your-endpoint.com/hook"/>`,
+    teams:`<input class="notif-url-input" id="notifUrl" placeholder="https://outlook.office.com/webhook/..."/>`
+  };
+  el.innerHTML=fields[type]||'';
+}
+function loadNotificationsTab(){
+  const channels=getNotifChannels(); const el=$('notifChannelGrid'); if(!el) return;
+  renderNotifFields();
+  if(!channels.length){
+    el.innerHTML='<div class="empty" style="grid-column:1/-1">No channels yet. Add one below.</div>';
+  } else {
+    el.innerHTML=channels.map(c=>`
+      <div class="notif-card">
+        <div class="notif-status ${c.active?'active':'inactive'}"></div>
+        <div class="notif-card-head"><span class="notif-icon">${notifIcons[c.type]||'🔔'}</span><div><div class="notif-card-name">${esc(c.name)}</div><div class="notif-card-type">${esc(c.type)}</div></div></div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.url||'')}</div>
+        <div style="display:flex;gap:6px"><button class="secondary" style="padding:5px 10px;font-size:11px" onclick="testNotifChannel('${esc(c.id)}')">Test</button><button class="secondary danger" style="padding:5px 10px;font-size:11px" onclick="deleteNotifChannel('${esc(c.id)}')">Delete</button></div>
+      </div>`).join('');
+  }
+}
+function bindNotifSave(){
+  if($('saveNotifBtn')) $('saveNotifBtn').onclick=()=>{
+    const type=$('notifType')?.value||'slack';
+    const name=($('notifName')?.value||'').trim()||`${type} channel`;
+    const url=($('notifUrl')?.value||'').trim();
+    if(!url) return toast('Enter webhook URL / email','error');
+    const channels=getNotifChannels();
+    channels.push({id:'nc-'+Date.now(),name,type,url,active:true,createdAt:Date.now()});
+    saveNotifChannels(channels);
+    addAuditEntry('notif.add',`Added ${type} notification channel: ${name}`,'low');
+    loadNotificationsTab();
+    toast('Channel saved','success');
+    if($('notifName')) $('notifName').value='';
+  };
+}
+function deleteNotifChannel(id){
+  const channels=getNotifChannels().filter(c=>c.id!==id);
+  saveNotifChannels(channels);
+  addAuditEntry('notif.delete',`Deleted notification channel ${id}`,'med');
+  loadNotificationsTab();
+  toast('Channel removed','success');
+}
+function testNotifChannel(id){
+  const c=getNotifChannels().find(x=>x.id===id);
+  if(!c) return;
+  toast(`Test ping sent to ${c.name} (${c.type})`, 'success');
+  addAuditEntry('notif.test',`Tested channel: ${c.name}`,'low');
+}
+
+// ── RBAC ──
+const RBAC_MATRIX=[
+  {feature:'View logs',cat:'Observability',admin:true,member:true,viewer:true},
+  {feature:'Search & filter logs',cat:'Observability',admin:true,member:true,viewer:true},
+  {feature:'Upload logs',cat:'Observability',admin:true,member:true,viewer:false},
+  {feature:'Delete logs',cat:'Observability',admin:true,member:false,viewer:false},
+  {feature:'View APIs & Endpoints',cat:'API Catalog',admin:true,member:true,viewer:true},
+  {feature:'Add / delete APIs',cat:'API Catalog',admin:true,member:true,viewer:false},
+  {feature:'View alerts',cat:'Alerts',admin:true,member:true,viewer:true},
+  {feature:'Create / edit rules',cat:'Alerts',admin:true,member:true,viewer:false},
+  {feature:'Manage notification channels',cat:'Alerts',admin:true,member:false,viewer:false},
+  {feature:'Manage Ops policies',cat:'Ops',admin:true,member:false,viewer:false},
+  {feature:'Manage PII masking',cat:'Ops',admin:true,member:false,viewer:false},
+  {feature:'Manage AI RCA provider',cat:'Ops',admin:true,member:false,viewer:false},
+  {feature:'Generate API keys',cat:'Keys',admin:true,member:false,viewer:false},
+  {feature:'View key analytics',cat:'Keys',admin:true,member:true,viewer:false},
+  {feature:'Manage team members',cat:'Settings',admin:true,member:false,viewer:false},
+  {feature:'Generate invite codes',cat:'Settings',admin:true,member:false,viewer:false},
+  {feature:'Approve changes',cat:'Settings',admin:true,member:false,viewer:false},
+];
+function loadRbacTab(){
+  const el=$('rbacMatrix'); if(!el) return;
+  let rows=''; let lastCat='';
+  RBAC_MATRIX.forEach(r=>{
+    if(r.cat!==lastCat){rows+=`<tr><td colspan="4" style="padding:10px 14px 4px"><span class="rbac-cat">${esc(r.cat)}</span></td></tr>`;lastCat=r.cat;}
+    rows+=`<tr><td class="rbac-feature-name" style="padding-left:24px">${esc(r.feature)}</td><td class="rbac-check ${r.admin?'yes':'no'}"></td><td class="rbac-check ${r.member?'yes':'no'}"></td><td class="rbac-check ${r.viewer?'yes':'no'}"></td></tr>`;
+  });
+  el.innerHTML=`<table class="rbac-table"><thead><tr><th>Feature</th><th>Admin</th><th>Member</th><th>Viewer</th></tr></thead><tbody>${rows}</tbody></table>`;
+  // Populate assign role selects
+  const users=getUsers();
+  const sel=$('rbacUserSelect'); if(sel){sel.innerHTML=users.map(u=>`<option value="${esc(u.id)}">${esc(u.name||u.email)}</option>`).join('');}
+}
+function bindRbacAssign(){
+  if($('assignRoleBtn')) $('assignRoleBtn').onclick=()=>{
+    const uid=$('rbacUserSelect')?.value; const role=$('rbacNewRole')?.value;
+    if(!uid||!role) return;
+    const users=getUsers(); const idx=users.findIndex(u=>u.id===uid);
+    if(idx<0) return;
+    const sess=getSession();
+    if(sess?.uid===uid&&role!=='admin'&&sess?.role==='admin'){ toast("Can't remove your own admin role",'error'); return; }
+    users[idx].role=role;
+    saveUsers(users);
+    addAuditEntry('rbac.assign',`Changed ${users[idx].email} role to ${role}`,'high');
+    toast(`Role updated to ${role}`,'success');
+    loadRbacTab();
+  };
+}
+
+// ── AUDIT TAB ──
+function loadAuditTab(){
+  const log=getAuditLog(); const el=$('settingsAuditLog'); if(!el) return;
+  if(!log.length){el.innerHTML='<div class="empty">No audit events yet.</div>';return;}
+  el.innerHTML=`<div class="stg-card" style="padding:0;overflow:hidden">${
+    log.slice(0,50).map(e=>`
+      <div class="audit-entry">
+        <span class="audit-ts">${new Date(e.ts).toLocaleTimeString()}</span>
+        <span class="audit-actor">${esc((e.actor||'system').split('@')[0])}</span>
+        <span class="audit-action">${esc(e.action)} <span style="color:var(--muted);font-weight:600">${esc(e.detail||'')}</span></span>
+        <span class="audit-severity ${e.severity==='high'?'high':e.severity==='med'?'med':'low'}">${esc(e.severity||'low')}</span>
+      </div>`).join('')
+  }</div>`;
+}
+
+// ── APPROVALS ──
+function loadApprovalsTab(){
+  const approvals=getApprovals();
+  const pending=approvals.filter(a=>a.status==='pending');
+  const history=approvals.filter(a=>a.status!=='pending');
+  const pel=$('approvalPending'); const hel=$('approvalHistoryList');
+  if(pel){
+    if(!pending.length){pel.innerHTML='<div class="empty">No pending approvals.</div>';}
+    else{pel.innerHTML=pending.map(a=>`
+      <div class="approval-card">
+        <div class="approval-head">
+          <div><div class="approval-title">${esc(a.title)}</div></div>
+          <span class="approval-status-chip pending">Pending</span>
+        </div>
+        <div class="approval-meta">Requested by <b>${esc(a.requestedBy)}</b> · ${new Date(a.ts).toLocaleDateString()}</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px">${esc(a.description)}</p>
+        <div class="approval-actions">
+          <button class="approve-btn" onclick="resolveApproval('${esc(a.id)}','approved')">✓ Approve</button>
+          <button class="reject-btn" onclick="resolveApproval('${esc(a.id)}','rejected')">✕ Reject</button>
+        </div>
+      </div>`).join('');}
+  }
+  if(hel){
+    if(!history.length){hel.innerHTML='<div class="empty">No approval history.</div>';}
+    else{hel.innerHTML=history.map(a=>`
+      <div class="approval-card" style="border-color:var(--line);background:transparent;opacity:.8">
+        <div class="approval-head">
+          <div class="approval-title">${esc(a.title)}</div>
+          <span class="approval-status-chip ${a.status}">${esc(a.status)}</span>
+        </div>
+        <div class="approval-meta">${esc(a.requestedBy)} · ${new Date(a.ts).toLocaleDateString()} · ${a.status==='approved'?`Approved by ${esc(a.resolvedBy||'Admin')}`:`Rejected`}</div>
+      </div>`).join('');}
+  }
+}
+function resolveApproval(id,status){
+  const sess=getSession();
+  const approvals=getApprovals();
+  const idx=approvals.findIndex(a=>a.id===id);
+  if(idx<0) return;
+  approvals[idx].status=status;
+  approvals[idx].resolvedBy=sess?.name||sess?.email||'Admin';
+  approvals[idx].resolvedAt=Date.now();
+  saveApprovals(approvals);
+  addAuditEntry(`approval.${status}`,`${status} approval: ${approvals[idx].title}`,'high');
+  loadApprovalsTab();
+  toast(`Approval ${status}`, status==='approved'?'success':'error');
+}
+function createApproval(title,description){
+  const sess=getSession();
+  const approvals=getApprovals();
+  approvals.unshift({id:'appr-'+Date.now(),title,description,status:'pending',requestedBy:sess?.email||'system',ts:Date.now()});
+  saveApprovals(approvals);
+  addAuditEntry('approval.create',`Created approval request: ${title}`,'med');
+  toast('Approval request created','success');
+}
+
+// ── TOPOLOGY ──
+let topoNodes=[],topoEdges=[],topoAnimFrame=null,topoSelected=null;
+const topoColors={healthy:'#10b981',degraded:'#f59e0b',down:'#f43f5e',unknown:'#6b7280'};
+
+function buildTopoFromLogs(){
+  const svcs=state.services||[];
+  const eps=state.endpoints||[];
+  // Build nodes from services
+  const nodes=svcs.map((s,i)=>({
+    id:s.service_name||s.name||`svc-${i}`,
+    label:(s.service_name||s.name||'').replace('s-','').replace('-api',''),
+    status: (s.error_rate_pct||0)>5 ? 'down' : (s.error_rate_pct||0)>1 ? 'degraded' : 'healthy',
+    calls: s.total_calls||s.request_count||0,
+    errorRate: s.error_rate_pct||0,
+    p95: s.p95_latency_ms||0,
+    x: 0, y: 0, vx: 0, vy: 0 // will be set by layout
+  }));
+  // Demo nodes if none
+  if(!nodes.length){
+    ['API Gateway','Payment Engine','Auth Service','User Service','Notification','DB Proxy','Message Queue'].forEach((label,i)=>{
+      nodes.push({id:`demo-${i}`,label,status:['healthy','healthy','degraded','healthy','healthy','down','healthy'][i],calls:Math.floor(Math.random()*5000+100),errorRate:[0.1,0.3,4.2,0.1,0.2,12.5,0.1][i],p95:Math.floor(Math.random()*400+50),x:0,y:0,vx:0,vy:0});
+    });
+  }
+  // Build edges: simulate or derive from known patterns
+  const edges=[];
+  if(nodes.length>1){
+    edges.push({from:nodes[0].id,to:nodes[1].id,weight:3,error:nodes[1].status==='down'});
+    edges.push({from:nodes[0].id,to:nodes[2]?.id||nodes[1].id,weight:2,error:false});
+    if(nodes[3]) edges.push({from:nodes[1].id,to:nodes[3].id,weight:1,error:false});
+    if(nodes[4]) edges.push({from:nodes[1].id,to:nodes[4].id,weight:1,error:nodes[4]?.status==='down'});
+    if(nodes[5]) edges.push({from:nodes[2]?.id,to:nodes[5].id,weight:2,error:nodes[5]?.status==='down'});
+    if(nodes[6]) edges.push({from:nodes[3]?.id,to:nodes[6].id,weight:1,error:false});
+  }
+  topoNodes=nodes; topoEdges=edges;
+}
+
+function layoutTopo(canvas){
+  const W=canvas.width,H=canvas.height;
+  const n=topoNodes.length; if(!n) return;
+  // Circular layout as starting point
+  topoNodes.forEach((node,i)=>{
+    const angle=(2*Math.PI*i/n)-Math.PI/2;
+    const r=Math.min(W,H)*0.34;
+    node.x=W/2+r*Math.cos(angle);
+    node.y=H/2+r*Math.sin(angle);
+    if(n<=1){node.x=W/2;node.y=H/2;}
+  });
+  // Override first node to center (gateway pattern)
+  if(n>=3){topoNodes[0].x=W/2;topoNodes[0].y=H/2;}
+}
+
+function drawTopo(){
+  const canvas=$('topoCanvas'); if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const rect=canvas.getBoundingClientRect();
+  if(canvas.width!==rect.width*dpr||canvas.height!==rect.height*dpr){
+    canvas.width=rect.width*dpr; canvas.height=rect.height*dpr;
+    ctx.scale(dpr,dpr);
+    layoutTopo(canvas);
+  }
+  const W=rect.width,H=rect.height;
+  ctx.clearRect(0,0,W,H);
+  const isDark=document.documentElement.classList.contains('dark');
+  // Edges
+  topoEdges.forEach(e=>{
+    const from=topoNodes.find(n=>n.id===e.from);
+    const to=topoNodes.find(n=>n.id===e.to);
+    if(!from||!to) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(from.x,from.y);
+    // Bezier curve
+    const mx=(from.x+to.x)/2,my=(from.y+to.y)/2-30;
+    ctx.quadraticCurveTo(mx,my,to.x,to.y);
+    const grad=ctx.createLinearGradient(from.x,from.y,to.x,to.y);
+    if(e.error){grad.addColorStop(0,'rgba(244,63,94,.6)');grad.addColorStop(1,'rgba(239,68,68,.9)');}
+    else{grad.addColorStop(0,'rgba(59,130,246,.5)');grad.addColorStop(1,'rgba(6,182,212,.7)');}
+    ctx.strokeStyle=grad;
+    ctx.lineWidth=e.weight||1;
+    ctx.setLineDash(e.error?[6,4]:[]);
+    ctx.stroke();
+    // Arrow
+    const dx=to.x-mx,dy=to.y-my;
+    const angle=Math.atan2(dy,dx);
+    const ax=to.x-18*Math.cos(angle),ay=to.y-18*Math.sin(angle);
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(ax-8*Math.cos(angle-0.4),ay-8*Math.sin(angle-0.4));
+    ctx.lineTo(ax-8*Math.cos(angle+0.4),ay-8*Math.sin(angle+0.4));
+    ctx.closePath();
+    ctx.fillStyle=e.error?'#f43f5e':'#60a5fa';
+    ctx.fill();
+    ctx.restore();
+  });
+  // Nodes
+  topoNodes.forEach(node=>{
+    const color=topoColors[node.status]||topoColors.unknown;
+    const isSelected=topoSelected===node.id;
+    const r=isSelected?28:22;
+    ctx.save();
+    // Shadow
+    ctx.shadowColor=color; ctx.shadowBlur=isSelected?24:12;
+    // Node circle
+    ctx.beginPath();
+    ctx.arc(node.x,node.y,r,0,Math.PI*2);
+    const grad2=ctx.createRadialGradient(node.x-6,node.y-6,2,node.x,node.y,r);
+    grad2.addColorStop(0,isDark?'#1e3a5f':'#dbeafe');
+    grad2.addColorStop(1,isDark?'#0d1b2e':'#f0f9ff');
+    ctx.fillStyle=grad2;
+    ctx.fill();
+    ctx.strokeStyle=color;
+    ctx.lineWidth=isSelected?3:2;
+    ctx.stroke();
+    ctx.shadowBlur=0;
+    // Status dot
+    ctx.beginPath();
+    ctx.arc(node.x+r*0.65,node.y-r*0.65,5,0,Math.PI*2);
+    ctx.fillStyle=color;
+    ctx.fill();
+    // Label
+    ctx.fillStyle=isDark?'#c7d9f5':'#1e3a5f';
+    ctx.font=`bold ${isSelected?13:11}px DM Sans,system-ui`;
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    const short=node.label.slice(0,12);
+    ctx.fillText(short,node.x,node.y);
+    // Below: error rate
+    if(node.errorRate>0){
+      ctx.fillStyle=color;
+      ctx.font=`800 9px DM Sans,system-ui`;
+      ctx.fillText(`${node.errorRate.toFixed(1)}% err`,node.x,node.y+r+12);
+    }
+    ctx.restore();
+  });
+}
+
+function initTopo(){
+  const canvas=$('topoCanvas'); if(!canvas) return;
+  buildTopoFromLogs();
+  layoutTopo(canvas);
+  drawTopo();
+  canvas.onclick=e=>{
+    const rect=canvas.getBoundingClientRect();
+    const x=e.clientX-rect.left,y=e.clientY-rect.top;
+    const hit=topoNodes.find(n=>Math.hypot(n.x-x,n.y-y)<28);
+    if(hit){
+      topoSelected=hit.id;
+      showTopoDetail(hit);
+    } else {
+      topoSelected=null;
+      if($('topoDetail')) $('topoDetail').hidden=true;
+    }
+    drawTopo();
+  };
+  // Dependency matrix
+  renderDepMatrix();
+  renderCriticalPaths();
+  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=()=>{buildTopoFromLogs();layoutTopo(canvas);drawTopo();renderDepMatrix();renderCriticalPaths();};
+  window.addEventListener('resize',()=>{const c=$('topoCanvas');if(c){c.width=0;drawTopo();}});
+}
+function showTopoDetail(node){
+  const el=$('topoDetail'); if(!el) return;
+  el.hidden=false;
+  if($('topoDetailName')) $('topoDetailName').textContent=node.label;
+  const downstream=topoEdges.filter(e=>e.from===node.id).map(e=>topoNodes.find(n=>n.id===e.to)?.label).filter(Boolean);
+  const upstream=topoEdges.filter(e=>e.to===node.id).map(e=>topoNodes.find(n=>n.id===e.from)?.label).filter(Boolean);
+  if($('topoDetailBody')) $('topoDetailBody').innerHTML=`
+    <div class="topo-kv-grid">
+      <div class="topo-kv"><small>Status</small><b style="color:${topoColors[node.status]||'#6b7280'}">${node.status}</b></div>
+      <div class="topo-kv"><small>Error Rate</small><b>${node.errorRate.toFixed(2)}%</b></div>
+      <div class="topo-kv"><small>P95 Latency</small><b>${node.p95||0}ms</b></div>
+      <div class="topo-kv"><small>Total Calls</small><b>${fmt(node.calls)}</b></div>
+    </div>
+    <div style="margin-top:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Upstream</div>${upstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
+      <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Downstream</div>${downstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
+    </div>`;
+}
+function renderDepMatrix(){
+  const el=$('depMatrix'); if(!el) return;
+  if(!topoEdges.length){el.innerHTML='<div class="empty">No dependency data yet. Ingest logs to discover service connections.</div>';return;}
+  el.innerHTML=topoEdges.map(e=>{
+    const from=topoNodes.find(n=>n.id===e.from);
+    const to=topoNodes.find(n=>n.id===e.to);
+    if(!from||!to) return '';
+    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:${e.error?'#f87171':'var(--text)'}">${esc(to.label)}</span><span class="level ${e.error?'ERROR':'INFO'}" style="font-size:10px">${e.error?'ERROR':'OK'}</span></div>`;
+  }).join('');
+}
+function renderCriticalPaths(){
+  const el=$('criticalPaths'); if(!el) return;
+  if(!topoNodes.length){el.innerHTML='<div class="empty">No data yet.</div>';return;}
+  const paths=topoNodes.filter(n=>n.errorRate>0).sort((a,b)=>b.errorRate-a.errorRate).slice(0,5);
+  if(!paths.length){el.innerHTML='<div class="empty">No critical paths detected.</div>';return;}
+  el.innerHTML=paths.map(n=>`
+    <div class="critical-path-item">
+      <div><code>${esc(n.label)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">via ingested traces</div></div>
+      <div class="cp-latency" style="color:${n.errorRate>5?'#f87171':'#f59e0b'}">${n.errorRate.toFixed(1)}% err</div>
+    </div>`).join('');
+}
+
+// ── LIVE LOGS (WebSocket simulation) ──
+let liveRunning=false,livePaused=false,liveInterval=null;
+let liveCounts={errors:0,warns:0,infos:0,total:0};
+const LIVE_SERVICES=['s-paymentengine-api','s-auth-service','s-user-api','s-notification','s-gateway','s-db-proxy'];
+const LIVE_PATHS=['/payment/charge','/auth/login','/user/profile','/notification/send','/api/health','/db/query'];
+const LIVE_MSGS={ERROR:['HTTP:NOT_FOUND while calling downstream','Connection timeout exceeded 30s','NullPointerException in handler chain','Database lock wait timeout'],WARN:['Response time exceeded 2s SLA','Circuit breaker open - using fallback','Rate limit approaching threshold','Cache miss ratio high'],INFO:['Request processed successfully','Health check passed','Config refreshed from vault','Session token renewed']};
+const LIVE_LEVELS=['INFO','INFO','INFO','WARN','ERROR','INFO','WARN','INFO'];
+
+function startLiveLogs(){
+  if(liveRunning) return;
+  liveRunning=true;
+  const badge=$('wsBadge');
+  if(badge){badge.textContent='⬤ Live';badge.className='ws-badge';}
+  liveInterval=setInterval(()=>{
+    if(livePaused) return;
+    const filterLevel=$('liveLogLevel')?.value||'';
+    const level=LIVE_LEVELS[Math.floor(Math.random()*LIVE_LEVELS.length)];
+    if(filterLevel&&level!==filterLevel&&!(filterLevel==='WARN'&&['WARN','ERROR'].includes(level))) return;
+    const svc=LIVE_SERVICES[Math.floor(Math.random()*LIVE_SERVICES.length)];
+    const path=LIVE_PATHS[Math.floor(Math.random()*LIVE_PATHS.length)];
+    const msgs=LIVE_MSGS[level]||LIVE_MSGS.INFO;
+    const msg=msgs[Math.floor(Math.random()*msgs.length)];
+    const ts=new Date().toLocaleTimeString();
+    liveCounts.total++;
+    if(level==='ERROR') liveCounts.errors++;
+    else if(level==='WARN') liveCounts.warns++;
+    else liveCounts.infos++;
+    const stream=$('liveStream');
+    if(stream){
+      const line=document.createElement('div');
+      line.className=`live-line ${level}`;
+      line.innerHTML=`<span class="live-ts">${esc(ts)}</span><span class="level ${level}">${level}</span><span class="live-svc">${esc(svc.replace('s-',''))}</span><span class="live-msg">${esc(msg)}</span><span class="live-path">${esc(path)}</span>`;
+      stream.prepend(line);
+      // Buffer cap
+      const items=stream.children;
+      if(items.length>500) for(let i=items.length-1;i>=500;i--) items[i].remove();
+    }
+    // Update stats
+    const rate=(liveCounts.total/((Date.now()-(liveStartTime||Date.now()))/1000)).toFixed(1);
+    setText('liveRate',`${Math.max(1,Math.floor(Math.random()*4+1))}/s`);
+    setText('liveErrors',liveCounts.errors);
+    setText('liveWarns',liveCounts.warns);
+    setText('liveInfos',liveCounts.infos);
+    const stream2=$('liveStream');
+    setText('liveBuffer',`${stream2?stream2.children.length:0}/500`);
+  }, 800);
+}
+let liveStartTime=Date.now();
+
+function stopLiveLogs(){
+  liveRunning=false;
+  if(liveInterval){clearInterval(liveInterval);liveInterval=null;}
+  const badge=$('wsBadge');
+  if(badge){badge.textContent='⬤ Paused';badge.className='ws-badge paused';}
+}
+
+function bindLiveLogs(){
+  if($('livePauseBtn')) $('livePauseBtn').onclick=()=>{
+    livePaused=!livePaused;
+    $('livePauseBtn').textContent=livePaused?'▶ Resume':'⏸ Pause';
+    const badge=$('wsBadge');
+    if(badge){badge.textContent=livePaused?'⬤ Paused':'⬤ Live';badge.className=`ws-badge ${livePaused?'paused':''}`;}
+  };
+  if($('liveClearBtn')) $('liveClearBtn').onclick=()=>{
+    const s=$('liveStream'); if(s) s.innerHTML='';
+    liveCounts={errors:0,warns:0,infos:0,total:0};
+    setText('liveErrors',0);setText('liveWarns',0);setText('liveInfos',0);setText('liveBuffer','0/500');
+  };
+}
+
+// ── HOOK: intercept nav-item clicks for new pages ──
+// Safe approach: augment nav items after DOM ready, avoid hoisting conflict
+function hookNewPageNav(){
+  // Use document-level delegation to avoid double-bind conflicts
+  // setPage() already handles all new page routing via patched version above
+  // This function now just ensures icons are rendered for new nav items
+  Object.entries(iconsExtra).forEach(([k,v])=>{
+    $$(`[data-icon="${k}"]`).forEach(x=>{ if(!x.innerHTML.trim()) x.innerHTML=v; });
+  });
+  // Stop live log stream when navigating away from liveLogs page
+  $$('[data-page-link]').forEach(a=>{
+    const pg=a.dataset.pageLink;
+    if(pg&&pg!=='liveLogs'){
+      const prev=a.onclick;
+      a.onclick=(e)=>{
+        if(liveRunning&&state.page==='liveLogs') stopLiveLogs();
+        if(prev) prev.call(a,e);
+        else { e.preventDefault(); setPage(pg); }
+      };
+    }
+  });
+}
+
+// ── v36 BOOT ──
+(async function v36Boot(){
+  // Auth guard — redirect to login if no session
+  const sess=guardAuth(); if(!sess) return;
+  renderUserChip(sess);
+
+  // Inject extended icons after original bind() has run
+  setTimeout(()=>{
+    Object.assign(icons, iconsExtra);
+    Object.entries(iconsExtra).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));
+    hookNewPageNav();
+    bindProfileSave();
+    bindGenInvite();
+    bindStgKeyGen();
+    bindNotifSave();
+    bindRbacAssign();
+    renderNotifFields();
+  }, 200);
+
+  // Seed demo approvals
+  if(!getApprovals().length){
+    localStorage.setItem('ox_approvals',JSON.stringify([
+      {id:'appr-demo-1',title:'Enable AI RCA with OpenAI',description:'Switch RCA provider from Local to OpenAI GPT-4o for better analysis quality.',status:'pending',requestedBy:'admin@observex.io',ts:Date.now()-3600000},
+      {id:'appr-demo-2',title:'Delete STAGING environment logs (30d+)',description:'Remove logs older than 30 days from STAGING to reduce storage costs.',status:'approved',requestedBy:'admin@observex.io',resolvedBy:'Admin',resolvedAt:Date.now()-1800000,ts:Date.now()-7200000},
+      {id:'appr-demo-3',title:'Add PagerDuty notification channel',description:'Connect PagerDuty integration key for P1 alert escalation.',status:'pending',requestedBy:'ops@observex.io',ts:Date.now()-900000},
+    ]));
+  }
+  // Seed audit trail
+  if(!getAuditLog().length){
+    addAuditEntry('auth.login','User signed in via session','low');
+    addAuditEntry('env.select','Environment set to PROD','low');
+    addAuditEntry('key.create','Generated ingestion API key: MuleSoft PROD','med');
+  }
+  // Seed demo users if empty
+  const users=getUsers();
+  if(!users.length){
+    const hash=await (async()=>{const e=new TextEncoder();const b=await crypto.subtle.digest('SHA-256',e.encode('demo1234observex-salt-2026'));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');})();
+    saveUsers([{id:'demo-001',email:'admin@observex.io',name:'Demo Admin',role:'admin',workspace:'fsbl-prod-ops',createdAt:Date.now()-86400000*7,hash}]);
+  }
+  // Seed demo ingest key
+  if(!getIngestKeys().length){
+    saveIngestKeys([{id:'ox-demo-key-001-fsbl',name:'MuleSoft PROD',env:'PROD',role:'ingest',createdAt:Date.now()-86400000*3}]);
+    const usage=getKeyUsage(); usage['ox-demo-key-001-fsbl']=4823; localStorage.setItem('ox_key_usage',JSON.stringify(usage));
+  }
+  // Seed demo notification channel
+  if(!getNotifChannels().length){
+    saveNotifChannels([{id:'nc-demo-1',name:'Ops Slack',type:'slack',url:'https://hooks.slack.com/services/demo',active:true,createdAt:Date.now()-86400000}]);
+  }
+})();

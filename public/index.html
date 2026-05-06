@@ -4,7 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260505-v28" />
+  <link rel="stylesheet" href="/styles.css?v=20260506-v36" />
+  <script>
+    // Immediate auth guard — before any paint
+    (function(){
+      try{ var s=JSON.parse(sessionStorage.getItem('ox_session')); if(s&&s.uid) return; }catch(e){}
+      window.location.replace('/login.html');
+    })();
+  </script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -31,7 +38,18 @@
         <a class="nav-item" href="#ops" data-page-link="ops"><span class="icon" data-icon="ops"></span><span class="label">Ops</span></a>
         <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">AI RCA</span></a>
         <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon" data-icon="docs"></span><span class="label">API Docs</span></a>
+        <a class="nav-item" href="#topology" data-page-link="topology"><span class="icon" data-icon="topology"></span><span class="label">Topology</span></a>
+        <a class="nav-item" href="#liveLogs" data-page-link="liveLogs"><span class="icon" data-icon="live"></span><span class="label">Live Logs</span></a>
+        <a class="nav-item" href="#settings" data-page-link="settings"><span class="icon" data-icon="settings"></span><span class="label">Settings</span></a>
       </nav>
+      <!-- User info chip -->
+      <div class="user-chip" id="userChip" hidden>
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-chip-info">
+          <strong id="userChipName">User</strong>
+          <small id="userChipRole">Viewer</small>
+        </div>
+      </div>
       <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
     </aside>
     <main class="content">
@@ -133,10 +151,162 @@
           </div>
         </div>
       </section>
+
+      <!-- ── TOPOLOGY PAGE ── -->
+      <section class="page" data-page="topology">
+        <div class="card topology-card">
+          <div class="section-head">
+            <div><h3>Service Topology</h3><span>Discovered from ingested logs · live dependency map</span></div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <select id="topoFilter" style="height:40px;width:160px;font-size:13px;border-radius:12px">
+                <option value="all">All flows</option>
+                <option value="error">Error paths</option>
+                <option value="slow">Slow paths</option>
+              </select>
+              <button id="refreshTopoBtn" class="secondary">Refresh</button>
+            </div>
+          </div>
+          <div class="topo-legend">
+            <span class="topo-legend-item"><span class="topo-dot healthy"></span>Healthy</span>
+            <span class="topo-legend-item"><span class="topo-dot degraded"></span>Degraded</span>
+            <span class="topo-legend-item"><span class="topo-dot down"></span>Down/Error</span>
+            <span class="topo-legend-item"><span class="topo-edge-sample normal"></span>Normal flow</span>
+            <span class="topo-legend-item"><span class="topo-edge-sample error"></span>Error path</span>
+          </div>
+          <canvas id="topoCanvas" class="topo-canvas"></canvas>
+          <div class="topo-detail-panel" id="topoDetail" hidden>
+            <div class="topo-detail-head"><strong id="topoDetailName">Service</strong><button class="secondary" onclick="document.getElementById('topoDetail').hidden=true">✕</button></div>
+            <div id="topoDetailBody"></div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:18px">
+          <div class="card"><div class="section-head"><h3>Service Dependencies</h3><span>Upstream / downstream call map</span></div><div id="depMatrix"></div></div>
+          <div class="card"><div class="section-head"><h3>Critical Paths</h3><span>Highest impact request chains</span></div><div id="criticalPaths"></div></div>
+        </div>
+      </section>
+
+      <!-- ── LIVE LOGS PAGE ── -->
+      <section class="page" data-page="liveLogs">
+        <div class="card live-logs-card">
+          <div class="section-head">
+            <div><h3>Live Log Stream</h3><span id="wsStatusText">WebSocket — Simulating real-time ingestion</span></div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <span class="ws-badge" id="wsBadge">⬤ Live</span>
+              <select id="liveLogLevel" style="height:40px;width:130px;font-size:13px;border-radius:12px">
+                <option value="">All levels</option>
+                <option value="ERROR">ERROR only</option>
+                <option value="WARN">WARN+</option>
+                <option value="INFO">INFO+</option>
+              </select>
+              <button id="livePauseBtn" class="secondary">⏸ Pause</button>
+              <button id="liveClearBtn" class="secondary">Clear</button>
+            </div>
+          </div>
+          <div class="live-stats-bar">
+            <div class="live-stat"><span>Rate</span><strong id="liveRate">0/s</strong></div>
+            <div class="live-stat"><span class="level ERROR" style="font-size:10px">ERR</span><strong id="liveErrors">0</strong></div>
+            <div class="live-stat"><span class="level WARN" style="font-size:10px">WRN</span><strong id="liveWarns">0</strong></div>
+            <div class="live-stat"><span class="level INFO" style="font-size:10px">INF</span><strong id="liveInfos">0</strong></div>
+            <div class="live-stat"><span>Buffer</span><strong id="liveBuffer">0/500</strong></div>
+          </div>
+          <div class="live-stream" id="liveStream"></div>
+        </div>
+      </section>
+
+      <!-- ── SETTINGS PAGE ── -->
+      <section class="page" data-page="settings">
+        <div class="settings-shell">
+          <nav class="settings-nav">
+            <div class="settings-nav-title">Account</div>
+            <button class="settings-nav-item active" data-stab="profile">👤 Profile</button>
+            <button class="settings-nav-item" data-stab="team">👥 Team Members</button>
+            <button class="settings-nav-item" data-stab="invites">🎟 Invite Codes</button>
+            <div class="settings-nav-title">Platform</div>
+            <button class="settings-nav-item" data-stab="apikeys">🔑 API Keys</button>
+            <button class="settings-nav-item" data-stab="keyanalytics">📊 Key Analytics</button>
+            <button class="settings-nav-item" data-stab="notifications">🔔 Notifications</button>
+            <button class="settings-nav-item" data-stab="rbac">🛡 RBAC</button>
+            <button class="settings-nav-item" data-stab="audit">📋 Audit Trail</button>
+            <button class="settings-nav-item" data-stab="approvals">✅ Approvals</button>
+          </nav>
+          <div class="settings-content">
+            <div class="settings-panel active" data-stab-panel="profile">
+              <div class="settings-section-head"><h3>Profile</h3><span>Your account details</span></div>
+              <div class="settings-form">
+                <div class="stg-row"><label>Full name</label><input class="stg-input" id="profileName" placeholder="Your name"/></div>
+                <div class="stg-row"><label>Email</label><input class="stg-input" id="profileEmail" disabled style="opacity:.55"/></div>
+                <div class="stg-row"><label>Role</label><input class="stg-input" id="profileRole" disabled style="opacity:.55"/></div>
+                <div class="stg-row"><label>Workspace</label><input class="stg-input" id="profileWorkspace" disabled style="opacity:.55"/></div>
+                <div class="stg-row"><label>Current password</label><input class="stg-input" id="profileOldPwd" type="password" placeholder="Required to change password"/></div>
+                <div class="stg-row"><label>New password</label><input class="stg-input" id="profileNewPwd" type="password" placeholder="Leave blank to keep current"/></div>
+                <div style="display:flex;gap:10px;margin-top:8px"><button id="saveProfileBtn">Save Changes</button><button id="logoutBtn" class="secondary danger">Sign Out</button></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-stab-panel="team">
+              <div class="settings-section-head"><h3>Team Members</h3><span>All users in this workspace</span></div>
+              <div id="teamMemberList"></div>
+            </div>
+            <div class="settings-panel" data-stab-panel="invites">
+              <div class="settings-section-head"><h3>Invite Codes</h3><span>Generate single-use codes for new members</span></div>
+              <div class="stg-gen-form">
+                <select id="inviteRoleSelect"><option value="member">Member</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
+                <input id="inviteExpiry" type="number" min="1" max="30" value="7" placeholder="Expires (days)"/>
+                <button id="genInviteBtn">Generate Code</button>
+              </div>
+              <div id="inviteCodeList"></div>
+            </div>
+            <div class="settings-panel" data-stab-panel="apikeys">
+              <div class="settings-section-head"><h3>API Keys</h3><span>Workspace-scoped ingestion keys</span></div>
+              <div class="stg-note">Keys are shown only once. Store securely.</div>
+              <div id="stgKeyList"></div>
+              <div class="stg-gen-form">
+                <input id="stgKeyName" placeholder="Key name e.g. MuleSoft PROD"/>
+                <select id="stgKeyEnv"><option>PROD</option><option>STAGING</option><option>DEV</option><option>UAT</option></select>
+                <select id="stgKeyRole"><option value="ingest">Ingest only</option><option value="read">Read only</option><option value="full">Full access</option></select>
+                <button id="stgGenKeyBtn">Generate Key</button>
+              </div>
+              <pre id="stgKeyOutput" class="secret-output">Generated key appears here once.</pre>
+            </div>
+            <div class="settings-panel" data-stab-panel="keyanalytics">
+              <div class="settings-section-head"><h3>API Key Analytics</h3><span>Usage metrics per key</span></div>
+              <div id="keyAnalyticsChart"></div>
+              <div id="keyAnalyticsTable"></div>
+            </div>
+            <div class="settings-panel" data-stab-panel="notifications">
+              <div class="settings-section-head"><h3>Notification Channels</h3><span>Where to route triggered alerts</span></div>
+              <div id="notifChannelGrid" class="notif-channel-grid"></div>
+              <div style="margin-top:20px"><div class="settings-section-head"><h3>Add Channel</h3></div>
+                <div class="stg-gen-form" style="flex-wrap:wrap">
+                  <select id="notifType" onchange="renderNotifFields()"><option value="slack">Slack Webhook</option><option value="email">Email</option><option value="pagerduty">PagerDuty</option><option value="webhook">Generic Webhook</option><option value="teams">MS Teams</option></select>
+                  <input id="notifName" placeholder="Channel name"/>
+                  <button id="saveNotifBtn">Save Channel</button>
+                </div>
+                <div id="notifFields" style="margin-top:10px"></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-stab-panel="rbac">
+              <div class="settings-section-head"><h3>Role-Based Access</h3><span>Permission matrix</span></div>
+              <div id="rbacMatrix"></div>
+              <div class="stg-card" style="margin-top:18px"><div class="settings-section-head"><h3>Assign Role</h3></div>
+                <div class="stg-gen-form"><select id="rbacUserSelect"></select><select id="rbacNewRole"><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option></select><button id="assignRoleBtn">Update Role</button></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-stab-panel="audit">
+              <div class="settings-section-head"><h3>Audit Trail</h3><span>All config and access events</span></div>
+              <div id="settingsAuditLog"></div>
+            </div>
+            <div class="settings-panel" data-stab-panel="approvals">
+              <div class="settings-section-head"><h3>Approval Workflows</h3><span>Changes requiring multi-person sign-off</span></div>
+              <div id="approvalPending"></div>
+              <div style="margin-top:18px"><div class="settings-section-head"><h3>History</h3></div><div id="approvalHistoryList"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v31"></script>
+  <script src="/app.js?v=20260505-v36"></script>
 </body>
 </html>
