@@ -68,12 +68,25 @@ function pick(...vals) {
   return undefined;
 }
 
+// Filesystem path segments that indicate this is an OS path, not an HTTP endpoint
+const RE_FS_PATH = /^\/(?:data|var|tmp|home|opt|usr|etc|mnt|proc|sys|run|srv|dev|root|logs?|mule|jboss|tomcat|app|apps|deploy|conf|config)\//i;
+// File extensions that are never HTTP endpoint paths
+const RE_FILE_EXT = /\.(?:log|txt|xml|jar|war|ear|zip|gz|properties|conf|yaml|yml|json|class|py|sh|bat|csv|sql|bak|tmp|lock|pid|out|err)(?:\.[0-9]+)?$/i;
+// MuleSoft internal queue/transaction paths
+const RE_MULE_INTERNAL = /\/(?:queue-[a-z]+-log|queue-xa|\.mule|mule-enterprise|mule-standalone)\//i;
+
 function normalizePath(p) {
   if (!p) return null;
   let s = String(p).trim().replace(/\\+/g, '/').replace(/\/+/g, '/');
   s = s.replace(/^['"]|['"]$/g, '').split(':')[0];
   if (!s || /[${}]/.test(s)) return null;
   if (!s.startsWith('/')) s = '/' + s;
+  // Reject filesystem paths — these are OS/container paths, not HTTP routes
+  if (RE_FS_PATH.test(s)) return null;
+  if (RE_FILE_EXT.test(s)) return null;
+  if (RE_MULE_INTERNAL.test(s)) return null;
+  // Reject excessively deep paths that look like filesystem traversal (>6 segments)
+  if (s.split('/').filter(Boolean).length > 6) return null;
   return s.replace(/\/$/, '') || '/';
 }
 

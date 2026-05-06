@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ObserveX | Environment Observability SaaS</title>
-  <link rel="stylesheet" href="/styles.css?v=20260506-v36" />
+  <link rel="stylesheet" href="/styles.css?v=20260506-v28" />
   <script>
     // Immediate auth guard — before any paint
     (function(){
@@ -59,7 +59,7 @@
         <div class="card api-endpoints-card">
           <div class="section-head">
             <div><h3>APIs &amp; Endpoints</h3><span>Click an API to expand its endpoints</span></div>
-            <div class="ae-actions"><button id="addApiBtn" class="secondary" type="button">+ Add API / Endpoint</button><div class="ae-search-wrap">
+            <div class="ae-actions"><button id="addApiBtn" class="secondary" type="button">+ Add API / Endpoint</button><button class="secondary" type="button" data-page-link="topology" title="View discovered service flow map">🔗 Service Topology</button><div class="ae-search-wrap">
               <span class="ae-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
               <input id="aeSearch" class="ae-search-input" placeholder="Filter by API name or endpoint path…" autocomplete="off" />
             </div></div>
@@ -277,6 +277,6 @@
   </div>
   <div id="logModal" class="modal-backdrop"><div class="modal-card"><div class="modal-head"><h3 id="modalTitle">Log details</h3><div class="modal-actions"><button id="modalTraceBtn" class="secondary">Trace this log</button><button id="modalClose" class="secondary">Close</button></div></div><div id="modalBody"></div></div></div>
   <div id="toastHost" class="toast-host"></div>
-  <script src="/app.js?v=20260505-v36"></script>
+  <script src="/app.js?v=20260506-v28"></script>
 </body>
 </html>

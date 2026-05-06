@@ -300,10 +300,22 @@ export async function getEndpoints(workspaceSlug, environmentName, serviceName =
        WHERE t.endpoint_id=ep.id AND t.started_at >= now() - interval '24 hours' AND t.latency_ms > 0
      ) ts ON true
      WHERE s.environment_id=$1 AND s.name !~* '\.xml(:[0-9]+)?$'${serviceClause}
+       AND ep.path !~* '\.(log|txt|xml|jar|war|ear|zip|gz|properties|conf|yaml|yml|class|sh|bat|tmp)(\.[0-9]+)?$'
+       AND ep.path !~* '^/(data|var|tmp|home|opt|usr|etc|mnt|proc|logs?|mule|jboss|tomcat|deploy)/'
+       AND ep.path !~* '/(queue-[a-z]+-log|queue-xa|\.mule|mule-enterprise)/'
+       AND array_length(string_to_array(trim(leading '/' from ep.path), '/'), 1) <= 6
      ORDER BY s.name, ep.method, ep.path`,
     values
   );
-  const autoRows = result.rows.filter(row => row.service_name && row.path);
+  const BAD_PATH = /^\/(?:data|var|tmp|home|opt|usr|etc|mnt|proc|logs?|mule|jboss|tomcat|deploy)\//i;
+  const FILE_EXT = /\.(?:log|txt|xml|jar|war|ear|zip|gz|properties|conf|yaml|yml|class|sh|bat|tmp)(\.[0-9]+)?$/i;
+  const MULE_INTERNAL = /\/(?:queue-[a-z]+-log|queue-xa|\.mule|mule-enterprise)\//i;
+  const autoRows = result.rows.filter(row => {
+    if (!row.service_name || !row.path) return false;
+    if (BAD_PATH.test(row.path) || FILE_EXT.test(row.path) || MULE_INTERNAL.test(row.path)) return false;
+    if (row.path.split('/').filter(Boolean).length > 6) return false;
+    return true;
+  });
   const manual = await query(`SELECT id, COALESCE(method,'GET') AS method, COALESCE(path,'/') AS path, status, service_name,
       0::int AS calls_total, 0::numeric(7,2) AS error_rate, NULL::int AS p95_latency_ms, 0::int AS backend_ms, NULL::timestamptz AS last_seen, '[]'::json AS top_errors
       FROM api_registry WHERE environment_id=$1 AND entry_type='endpoint' AND source='manual' AND deleted_at IS NULL ${serviceName ? 'AND service_name=$2' : ''}`, values);

@@ -223,7 +223,7 @@ async function loadApisEndpoints(q){
             <div class="api-acc-stat"><small>Health</small><b style="color:${health>=80?'var(--good)':health>=50?'var(--warn)':'var(--bad)'}">${health?health+'%':'—'}</b></div>
           </div>
         </button>
-        <div class="api-accordion-body"><div class="api-accordion-body-inner"><div class="api-manage-row"><button class="mini-link danger delete-api" data-service="${esc(s.name)}">Delete API</button><span>Manual delete hides this API/endpoint from the selected environment.</span></div>
+        <div class="api-accordion-body"><div class="api-accordion-body-inner"><div class="api-manage-row"><button class="mini-link danger delete-api" data-service="${esc(s.name)}">Delete API</button><button class="mini-link topo-jump" data-service="${esc(s.name)}" title="View this service in Service Topology">🔗 View Topology</button><span>Manual delete hides this API/endpoint from the selected environment.</span></div>
           ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><div class="ep-action-cell"><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">Errors →</button><button class="mini-link danger delete-endpoint" data-service="${esc(s.name)}" data-method="${esc(meth)}" data-path="${esc(ep.path||'')}">Delete</button></div></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
         </div></div>
       </div>`;
@@ -240,6 +240,7 @@ async function loadApisEndpoints(q){
     });
     $$('.endpoint-errors').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();openEndpointErrors(btn.dataset.service, btn.dataset.path);});
     $$('.delete-endpoint').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();deleteApiRegistry({service_name:btn.dataset.service, method:btn.dataset.method, path:btn.dataset.path});});
+    $$('.topo-jump').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();state.topoHighlight=btn.dataset.service;setPage('topology');});
     $$('.delete-api').forEach(btn=>btn.onclick=(ev)=>{ev.stopPropagation();deleteApiRegistry({service_name:btn.dataset.service});});
   } catch(e){toast('APIs & Endpoints: '+e.message,'error');}
 }
@@ -775,7 +776,10 @@ function renderEnvButtons(){
   if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable env-policy-card" data-env-row="${esc(env)}"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected environment':'Available environment scope'}</p></div><div class="row-actions env-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join('');
   $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env));
   $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env));
-  $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});
+  $$('.env-btn').forEach(b=>b.onclick=()=>{
+    if(b.classList.contains('active')) return; // already selected, skip refresh
+    state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();
+  });
 }
 
 const apiDocTemplates = {
@@ -871,7 +875,18 @@ async function deleteApiRegistry(payload){
 }
 
 function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
-async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
+async function refreshAll(){
+  $('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);
+  renderEnvButtons();
+  // Prevent layout-shift "shaking" during parallel API refresh
+  const content = document.querySelector('.content');
+  if (content) content.classList.add('env-refreshing');
+  try {
+    await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);
+  } finally {
+    if (content) content.classList.remove('env-refreshing');
+  }
+}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
 
 /* ═══════════════════════════════════════════════════════════
@@ -1392,6 +1407,18 @@ function drawTopo(){
     const isSelected=topoSelected===node.id;
     const r=isSelected?28:22;
     ctx.save();
+    // Highlight ring for nodes arrived via topology jump
+    if(isSelected){
+      ctx.beginPath();
+      ctx.arc(node.x,node.y,r+8,0,Math.PI*2);
+      ctx.strokeStyle=color;
+      ctx.lineWidth=2;
+      ctx.setLineDash([4,4]);
+      ctx.globalAlpha=0.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha=1;
+    }
     // Shadow
     ctx.shadowColor=color; ctx.shadowBlur=isSelected?24:12;
     // Node circle
@@ -1432,6 +1459,12 @@ async function initTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
   await buildTopoFromLogs();
   layoutTopo(canvas);
+  // If navigated from APIs page with a service highlight, auto-select that node
+  if(state.topoHighlight){
+    const match=topoNodes.find(n=>n.id===state.topoHighlight||n.label===state.topoHighlight);
+    if(match){topoSelected=match.id;showTopoDetail(match);}
+    state.topoHighlight=null; // consume once
+  }
   drawTopo();
   canvas.onclick=e=>{
     const rect=canvas.getBoundingClientRect();
