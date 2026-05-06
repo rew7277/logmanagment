@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import apiRoutes from './routes/api.js';
+import authRoutes from './routes/auth.js';
 import { hasDatabase, query, closePool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { seed } from './db/seed.js';
@@ -32,8 +33,9 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(compression());
 app.use(express.json({ limit: process.env.JSON_LIMIT || '5mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '0', etag: false }));
+app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '0', etag: false, index: false }));
 
 // ─── Health / Readiness ───────────────────────────────────────────────────────
 
@@ -67,6 +69,9 @@ app.get('/ready', async (_req, res) => {
 
 // ─── API & SPA ────────────────────────────────────────────────────────────────
 
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'landing.html')));
+app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+app.use('/api/auth', authRoutes);
 app.use('/api', apiRoutes);
 
 app.get('*', (_req, res) => {
