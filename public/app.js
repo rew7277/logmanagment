@@ -79,7 +79,7 @@ function setPage(page){
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 
-function metric(label,value,sub,tone='neutral',action='logs'){return `<button type="button" class="metric-card ${tone}" data-metric-action="${esc(action)}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3 title="${esc(String(value))}">${value}</h3><p title="${esc(sub)}">${esc(sub)}</p></button>`;}
+function metric(label,value,sub,tone='neutral',action='logs',tooltip=''){return `<button type="button" class="metric-card metric-${esc(action)} ${tone}" data-metric-action="${esc(action)}" title="${esc(tooltip || sub)}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3 title="${esc(String(value))}">${value}</h3><p title="${esc(sub)}">${esc(sub)}</p><small class="metric-click-hint">Click to inspect</small></button>`;}
 
 function bindOverviewMetricCards(m={}){
   $$('.metric-card[data-metric-action]').forEach(card=>{
@@ -100,52 +100,6 @@ function routeMetric(action, m={}){
   toast('Opened related log view','success');
 }
 
-function renderOverviewPulse(m){
-  const metricsEl=$('metrics'); if(!metricsEl) return;
-  let pulse=$('overviewPulse');
-  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card visual-pulse'; metricsEl.insertAdjacentElement('afterend',pulse); }
-  const errRate=Number(m.error_rate||0);
-  const spikePct=Number(m.error_spike_percent||0);
-  const p95=Number(m.p95_latency_ms||0);
-  const throughput=Number(m.throughput_1h||0);
-  const recentErr=Number(m.recent_errors_1h||0);
-  const prevErr=Number(m.previous_errors_1h||0);
-  const errPct=Math.min(100,errRate);
-  const spikeNorm=Math.min(100,Math.max(0,spikePct));
-  const latPct=Math.min(100,(p95/2000)*100);
-  const thrPct=Math.min(100,(throughput/10000)*100);
-  const maxErr=Math.max(1,recentErr,prevErr);
-  const prevW=Math.max(3,Math.round((prevErr/maxErr)*100));
-  const recentW=Math.max(3,Math.round((recentErr/maxErr)*100));
-  const risk=Math.min(100,Math.round((errPct*1.8)+(spikeNorm*.45)+(latPct*.35)));
-  const riskTone=risk>70?'bad':risk>35?'warn':'good';
-  pulse.innerHTML=`
-    <div class="section-head"><h3>Operational pulse</h3><span>Visual health from error spike / latency / throughput</span></div>
-    <div class="pulse-visual-grid">
-      ${pulseGauge('Error rate', errPct, errRate.toFixed(2)+'%', errRate>5?'bad':errRate>1?'warn':'good', 'Click to open ERROR logs', 'errors')}
-      ${pulseGauge('Spike growth', spikeNorm, spikePct.toFixed(2)+'%', spikePct>50?'bad':spikePct>0?'warn':'good', 'Click to open latest spike logs', 'spike')}
-      ${pulseGauge('P95 latency', latPct, fmtMs(p95), latPct>50?'bad':latPct>20?'warn':'good', 'Click to inspect slow traces', 'latency')}
-      ${pulseGauge('Throughput 1h', thrPct, fmt(throughput), 'neutral', 'Click to view last-hour log stream', 'throughput')}
-    </div>
-    <div class="pulse-analytics-grid">
-      <button class="pulse-compare" data-metric-action="spike">
-        <div><b>Error comparison</b><span>Previous 1h vs latest 1h</span></div>
-        <div class="compare-row"><small>Previous</small><i><em style="width:${prevW}%"></em></i><strong>${fmt(prevErr)}</strong></div>
-        <div class="compare-row danger"><small>Latest</small><i><em style="width:${recentW}%"></em></i><strong>${fmt(recentErr)}</strong></div>
-      </button>
-      <button class="pulse-risk ${riskTone}" data-metric-action="top-error">
-        <div><b>Risk compass</b><span>Combined operational pressure</span></div>
-        <div class="risk-meter"><i style="width:${Math.max(4,risk)}%"></i></div>
-        <strong>${risk}/100</strong>
-      </button>
-      <button class="pulse-top-error" data-metric-action="top-error">
-        <div><b>Dominant error</b><span>${fmt(m.top_error_count||0)} events</span></div>
-        <p title="${esc(String(m.top_error_signature||'No errors observed'))}">${esc(String(m.top_error_signature||'No errors observed'))}</p>
-      </button>
-    </div>
-    <div class="ai-insight"><b>AI investigation hint</b><span>${esc(buildInsight(m))}</span></div>`;
-  $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeMetric(btn.dataset.metricAction,m));
-}
 function pulseGauge(label,pct,value,tone,hint,action){
   const safePct=Math.max(0,Math.min(100,Number(pct||0)));
   return `<button class="pulse-gauge ${tone}" data-metric-action="${esc(action)}" title="${esc(hint)}">
@@ -290,31 +244,6 @@ function openEndpointErrors(service,path){
 
 async function initWorkspaces(){try{const ws=await api('/api/workspaces');state.workspace=ws[0]?.slug||state.workspace;const name=ws[0]?.name||'FSBL Production Ops';$('brandWorkspaceName')&&($('brandWorkspaceName').textContent=name);await loadEnvironmentList();}catch{$('brandWorkspaceName')&&($('brandWorkspaceName').textContent='FSBL Production Ops');state.environments=['PROD','UAT','DEV','DR'];}}
 
-async function loadOverview(){
-  try{
-    const {metrics:m}=await api(endpoint('/overview'));
-    const score=healthScore(m);
-    const tone=scoreTone(score);
-    setText('heroEnv', state.environment);
-    const ring=$('scoreRing');
-    if(ring){ ring.className=`score-ring ${tone}`; ring.style.setProperty('--score',score); ring.innerHTML=`<span>${score?score+'%':'--'}</span>`; }
-    setHtml('metrics',[
-      metric(state.environment,score?score+'%':'--','Calculated health',tone,'apis'),
-      metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'From ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good','errors'),
-      metric('Error spike',fmt(m.error_spike_events||0),'Errors in latest hour above previous hour',Number(m.error_spike_events)>20?'bad':Number(m.error_spike_events)>0?'warn':'good','spike'),
-      metric('P95 latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral','latency'),
-      metric('Throughput 1h',fmt(m.throughput_1h||0),'Events received in last hour','neutral','throughput'),
-      metric('Top error',fmt(m.top_error_count||0),String(m.top_error_signature||'No errors observed').slice(0,70),Number(m.top_error_count)?'warn':'good','top-error'),
-      metric('Logs',fmt(m.logs_ingested),'Total ingested logs','neutral','logs'),
-      metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good','alerts')
-    ].join(''));
-    setText('summaryEnv',`${state.environment} only`);
-    setHtml('summaryGrid',[['Services',m.services],['Endpoints',m.endpoints],['Success rate',`${Number(m.success_rate||Math.max(0,100-Number(m.error_rate||0))).toFixed(2)}%`],['P99 latency',fmtMs(m.p99_latency_ms||0)],['Error budget burn',`${Number(m.error_budget_burn||0).toFixed(2)}x`],['APDEX',Number(m.apdex||0).toFixed(2)],['Throughput/min',fmt(m.throughput_per_min||0)],['Recent errors 1h',fmt(m.recent_errors_1h||0)],['Previous errors 1h',fmt(m.previous_errors_1h||0)]].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
-    bindOverviewMetricCards(m);
-    renderOverviewPulse(m);
-    setHtml('infraGrid',[['Upload engine','10 parallel files'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
-  }catch(e){toast(e.message,'error');}
-}
 async function loadApisEndpoints(q){
   q = (q !== undefined ? q : state.aeQuery || '').toLowerCase().trim();
   state.aeQuery = q;
@@ -1055,6 +984,97 @@ async function deleteApiRegistry(payload){
   }catch(e){toast(e.message,'error');}
 }
 
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};if($('appSignOutBtn')) $('appSignOutBtn').onclick=async()=>{try{await fetch('/api/auth/logout',{method:'POST',credentials:'include'});}catch(e){} location.href='/signin.html';};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files&&files.length)uploadManyFiles(files);});fi.onchange=()=>{if(fi.files&&fi.files.length)uploadManyFiles(fi.files);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
-async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
+
+
+// V41 overview command-center upgrade
+function currentOverviewRange(){ return $('overviewRange')?.value || '24h'; }
+function setOverviewChrome(m={}){
+  const badge=$('overviewEnvBadge');
+  if(badge){ badge.textContent=state.environment; badge.className=`env-status-pill ${state.environment.toLowerCase()}`; }
+  const banner=$('prodSafeBanner');
+  if(banner){
+    const alerts=Number(m.active_alerts||0), spike=Number(m.error_spike_events||0);
+    banner.textContent = alerts>0 ? `${fmt(alerts)} open incident(s) in ${state.environment}. Review Alerts before making production changes.` : (spike>0 ? `Spike detected in ${state.environment}. Open latest spike logs for RCA.` : `No incidents detected in ${state.environment}. Continue monitoring or upload logs for deeper analysis.`);
+    banner.classList.toggle('warn', alerts>0 || spike>0);
+  }
+}
+function renderOverviewPulse(m){
+  const metricsEl=$('metrics'); if(!metricsEl) return;
+  let pulse=$('overviewPulse');
+  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card visual-pulse v41-pulse'; metricsEl.insertAdjacentElement('afterend',pulse); }
+  const errRate=Number(m.error_rate||0), spikePct=Number(m.error_spike_percent||0), throughput=Number(m.throughput_1h||0);
+  const recentErr=Number(m.recent_errors_1h||0), prevErr=Number(m.previous_errors_1h||0), p95=Number(m.p95_latency_ms||0);
+  const maxErr=Math.max(1,recentErr,prevErr);
+  const prevH=Math.max(6,Math.round((prevErr/maxErr)*100));
+  const latestH=Math.max(6,Math.round((recentErr/maxErr)*100));
+  const delta=prevErr?(((recentErr-prevErr)/prevErr)*100):(recentErr?100:0);
+  const arrow=delta<0?'↓':delta>0?'↑':'→';
+  const risk=Math.max(0,Math.min(100,Math.round((errRate*1.4)+Math.max(0,delta)*.25+(p95?Math.min(25,p95/80):0)+(Number(m.active_alerts||0)*5))));
+  const top=String(m.top_error_signature||'No errors observed');
+  pulse.innerHTML=`
+    <div class="section-head pulse-title"><div><h3>Operational Pulse</h3><span>Error trend (last 1h vs previous 1h)</span></div><div class="pulse-help" title="Operational Pulse compares recent errors, spike growth, throughput, and latency to show production pressure.">?</div></div>
+    <div class="pulse-dashboard">
+      <button class="pulse-trend-card" data-metric-action="spike" title="Click to open latest spike logs">
+        <div class="trend-bars" aria-label="Previous ${fmt(prevErr)}, latest ${fmt(recentErr)}">
+          <div><i style="height:${prevH}%"></i><span>Previous<br><b>${fmt(prevErr)}</b></span></div>
+          <div class="latest"><i style="height:${latestH}%"></i><span>Latest<br><b>${fmt(recentErr)}</b></span></div>
+        </div>
+        <p>Previous 1h vs Latest 1h error count</p>
+      </button>
+      <div class="pulse-indicators">
+        ${pulseIndicator('Error rate', fmtPct(errRate), `${delta<=0?'decreasing':'watching'} ${arrow}`, errRate>5?'bad':errRate>1?'warn':'good', 'errors')}
+        ${pulseIndicator('Spike growth', `${delta.toFixed(2)}%`, delta<0?'↓ decreasing':delta>0?'↑ increasing':'stable', delta>0?'bad':'good', 'spike')}
+        ${pulseIndicator('Throughput', fmt(throughput), throughput===0?'Check ingestion':'Receiving events', throughput===0?'warn':'good', 'throughput')}
+      </div>
+      <div class="pulse-chips">
+        <button data-metric-action="errors">ERROR logs</button>
+        <button data-metric-action="spike">Latest spike logs</button>
+        <button data-metric-action="latency" ${p95?'' :'title="No traces ingested in selected time range"'}>Slow traces</button>
+        <button data-metric-action="throughput">Last-hour log stream</button>
+      </div>
+    </div>
+    <div class="risk-ai-grid">
+      <button class="risk-compass-card" data-metric-action="top-error" title="Open dominant error group">
+        <div class="risk-dial" style="--risk:${risk}"><span>${risk}/100</span></div>
+        <div><h4>Risk Compass</h4><p>Combined operational pressure</p></div>
+      </button>
+      <button class="dominant-error-card" data-metric-action="top-error">
+        <span>Dominant error</span><b>${fmt(m.top_error_count||0)} events</b><p title="${esc(top)}">${esc(top)}</p>
+      </button>
+      <div class="ai-insight v41-ai"><div><b>AI investigation hint</b><button class="help-icon" title="AI hint is generated from current error spike, throughput, latency, alerts, and top error group.">?</button></div><span>${esc(buildInsight(m))}</span><button class="run-deep" type="button" data-metric-action="top-error">Run deep analysis</button></div>
+    </div>`;
+  $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeMetric(btn.dataset.metricAction,m));
+}
+function pulseIndicator(label,value,note,tone,action){
+  return `<button class="pulse-indicator ${tone}" data-metric-action="${esc(action)}"><small>${esc(label)}</small><b>${esc(value)}</b><span>${esc(note)}</span></button>`;
+}
+async function loadOverview(){
+  try{
+    const {metrics:m}=await api(endpoint('/overview')+`?range=${encodeURIComponent(currentOverviewRange())}`);
+    const score=Number(m.health_score || healthScore(m));
+    const tone=scoreTone(score);
+    setOverviewChrome(m);
+    setText('heroEnv', state.environment);
+    const ring=$('scoreRing');
+    if(ring){ ring.className=`score-ring ${tone}`; ring.style.setProperty('--score',score); ring.innerHTML=`<span>${score?score+'%':'--'}</span>`; }
+    setHtml('metrics',[
+      metric('Health Score',score?score+'%':'--','Health score',score>=90?'good':score>=80?'warn':'bad','apis','Health is green above 90%, orange from 80–90%, red below 80%.'),
+      metric('Error Rate',`${Number(m.error_rate||0).toFixed(2)}%`,'from ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good','errors','Click to open ERROR logs view.'),
+      metric('Error Spike',fmt(m.error_spike_events||0),'Errors in latest hour vs previous hour',Number(m.error_spike_events)>20?'bad':Number(m.error_spike_events)>0?'warn':'good','spike','Click to open latest spike logs.'),
+      metric('P95 Latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral','latency',Number(m.p95_latency_ms)?'Click to inspect slow traces':'No traces ingested in selected time range'),
+      metric('Throughput 1h',fmt(m.throughput_1h||0),'Events received in last hour',Number(m.throughput_1h)>0?'good':'warn','throughput','Click to view last-hour log stream.'),
+      metric('Top Error',fmt(m.top_error_count||0),String(m.top_error_signature||'No errors observed').slice(0,86),Number(m.top_error_count)?'warn':'good','top-error','Click to open top error group logs.'),
+      metric('Total Logs',fmt(m.logs_ingested),'Total ingested logs','neutral','logs','Click to open all logs.'),
+      metric('Open Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good','alerts','Click to open alerts.')
+    ].join(''));
+    setText('summaryEnv',`Environment Summary – ${state.environment}`);
+    setHtml('summaryGrid',[['Environment',state.environment],['Services',m.services],['Endpoints',m.endpoints],['Success rate',`${Number(m.success_rate||Math.max(0,100-Number(m.error_rate||0))).toFixed(2)}%`],['APDEX',Number(m.apdex||0).toFixed(2)],['Error budget burn',`${Number(m.error_budget_burn||0).toFixed(2)}x`],['Throughput / min',fmt(m.throughput_per_min||0)],['Recent errors 1h',fmt(m.recent_errors_1h||0)],['Previous errors 1h',fmt(m.previous_errors_1h||0)]].map(([k,v])=>`<div class="kv" title="${esc(k)}"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
+    bindOverviewMetricCards(m);
+    renderOverviewPulse(m);
+    setHtml('infraGrid',[['Upload engine','10 parallel files'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
+  }catch(e){toast(e.message,'error');}
+}
+
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();}; if($('overviewRange')) $('overviewRange').onchange=()=>loadOverview();if($('appSignOutBtn')) $('appSignOutBtn').onclick=async()=>{try{await fetch('/api/auth/logout',{method:'POST',credentials:'include'});}catch(e){} location.href='/signin.html';};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files&&files.length)uploadManyFiles(files);});fi.onchange=()=>{if(fi.files&&fi.files.length)uploadManyFiles(fi.files);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);$('overviewEnvBadge')&&($('overviewEnvBadge').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

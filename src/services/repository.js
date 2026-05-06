@@ -131,7 +131,8 @@ export async function getEnvironment(workspaceSlug, environmentName) {
   return result.rows[0] || ensureWorkspaceEnvironment(workspaceSlug, environmentName);
 }
 
-export async function getOverview(workspaceSlug, environmentName) {
+export async function getOverview(workspaceSlug, environmentName, range = '24h') {
+  const safeRange = { '1h': '1 hour', '4h': '4 hours', '24h': '24 hours', '7d': '7 days' }[String(range)] || '24 hours';
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env) return null;
 
@@ -157,7 +158,11 @@ export async function getOverview(workspaceSlug, environmentName) {
   const [logStats, alertStats, serviceStats, endpointStats, traceStats, recentStats, prevStats, topError] = await Promise.all([
     query(
       `SELECT count(*)::int logs_ingested,
-              COALESCE(100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) error_rate
+              COALESCE(
+                100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL') AND timestamp >= now() - interval '${safeRange}') /
+                NULLIF(count(*) FILTER (WHERE timestamp >= now() - interval '${safeRange}'),0),
+                0
+              )::numeric(7,2) error_rate
        FROM log_events WHERE environment_id=$1`,
       [env.id]
     ),
@@ -169,7 +174,7 @@ export async function getOverview(workspaceSlug, environmentName) {
     ),
     query(
       `SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int p95_latency_ms
-       FROM traces WHERE environment_id=$1 AND started_at >= now() - interval '24 hours'`,
+       FROM traces WHERE environment_id=$1 AND started_at >= now() - interval '${safeRange}'`,
       [env.id]
     ),
     query(
@@ -186,7 +191,7 @@ export async function getOverview(workspaceSlug, environmentName) {
     ),
     query(
       `SELECT COALESCE(NULLIF(raw->>'error_type',''), NULLIF(raw->>'exception',''), NULLIF(raw->'payload'->>'errorType',''), NULLIF(raw->'analytics'->>'http_status',''), regexp_replace(left(message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error') AS signature, count(*)::int count
-       FROM log_events WHERE environment_id=$1 AND severity IN ('ERROR','FATAL')
+       FROM log_events WHERE environment_id=$1 AND severity IN ('ERROR','FATAL') AND timestamp >= now() - interval '${safeRange}'
        GROUP BY 1 ORDER BY count DESC LIMIT 1`,
       [env.id]
     )
