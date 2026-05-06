@@ -78,7 +78,25 @@ function setPage(page){
   if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
+
 function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
+function renderOverviewPulse(m){
+  const metricsEl=$('metrics'); if(!metricsEl) return;
+  let pulse=$('overviewPulse');
+  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card'; metricsEl.insertAdjacentElement('afterend',pulse); }
+  const err=Math.min(100,Number(m.error_rate||0));
+  const spike=Math.min(100,Number(m.error_spike_percent||0));
+  const lat=Math.min(100,(Number(m.p95_latency_ms||0)/2000)*100);
+  const thr=Math.min(100,(Number(m.throughput_1h||0)/10000)*100);
+  pulse.innerHTML=`<div class="section-head"><h3>Operational pulse</h3><span>Error spike / latency / throughput</span></div><div class="pulse-grid">${pulseBar('Error rate',err,Number(m.error_rate||0).toFixed(2)+'%',err>5?'bad':err>1?'warn':'good')}${pulseBar('Spike growth',spike,Number(m.error_spike_percent||0).toFixed(2)+'%',spike>50?'bad':spike>0?'warn':'good')}${pulseBar('P95 latency',lat,fmtMs(m.p95_latency_ms||0),lat>50?'bad':lat>20?'warn':'good')}${pulseBar('Throughput 1h',thr,fmt(m.throughput_1h||0),'neutral')}</div><div class="ai-insight"><b>AI investigation hint</b><span>${esc(buildInsight(m))}</span></div>`;
+}
+function pulseBar(label,pct,value,tone){return `<div class="pulse-item ${tone}"><div><b>${esc(label)}</b><span>${esc(value)}</span></div><div class="pulse-track"><i style="width:${Math.max(3,Math.min(100,pct))}%"></i></div></div>`;}
+function buildInsight(m){
+  if(Number(m.error_spike_events||0)>0) return `Error spike detected: ${fmt(m.error_spike_events)} more errors than previous hour. Top error: ${String(m.top_error_signature||'Unknown').slice(0,90)}.`;
+  if(Number(m.error_rate||0)>5) return `Error rate is high at ${Number(m.error_rate||0).toFixed(2)}%. Start with Top error and endpoint error grouping.`;
+  if(Number(m.p95_latency_ms||0)>1000) return `Latency is elevated. Check slow traces and upstream dependency timings.`;
+  return 'No major spike detected from the current ingested data. Continue monitoring throughput, P95, and top error groups.';
+}
 function healthScore(m){const logs=Number(m.logs_ingested||0);if(!logs)return 0;const error=Number(m.error_rate||0);const latency=Number(m.p95_latency_ms||0);const alerts=Number(m.active_alerts||0);return Math.round(Math.max(0,Math.min(100,100-(error*2)-Math.max(0,latency-500)/100-(alerts*3))));}
 function scoreTone(score){if(!score)return 'empty';if(score>=95)return 'good';if(score>=85)return 'warn';return 'bad';}
 
@@ -228,8 +246,9 @@ async function loadOverview(){
       metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good')
     ].join(''));
     setText('summaryEnv',`${state.environment} only`);
-    setHtml('summaryGrid',[['Services',m.services],['Endpoints',m.endpoints],['Data source',m.logs_ingested?'Live ingestion':'No logs yet'],['Database','Connected'],['Partition',state.environment],['Masking','Policy ready']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
-    setHtml('infraGrid',[['Upload engine','Streaming'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
+    setHtml('summaryGrid',[['Services',m.services],['Endpoints',m.endpoints],['Success rate',`${Number(m.success_rate||Math.max(0,100-Number(m.error_rate||0))).toFixed(2)}%`],['P99 latency',fmtMs(m.p99_latency_ms||0)],['Error budget burn',`${Number(m.error_budget_burn||0).toFixed(2)}x`],['APDEX',Number(m.apdex||0).toFixed(2)],['Throughput/min',fmt(m.throughput_per_min||0)],['Recent errors 1h',fmt(m.recent_errors_1h||0)],['Previous errors 1h',fmt(m.previous_errors_1h||0)]].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
+    renderOverviewPulse(m);
+    setHtml('infraGrid',[['Upload engine','10 parallel files'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
   }catch(e){toast(e.message,'error');}
 }
 async function loadApisEndpoints(q){

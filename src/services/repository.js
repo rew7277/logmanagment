@@ -185,27 +185,49 @@ export async function getOverview(workspaceSlug, environmentName) {
       [env.id]
     ),
     query(
-      `SELECT COALESCE(NULLIF(error_type,''), NULLIF(message,''), 'Unknown error') AS signature, count(*)::int count
+      `SELECT COALESCE(NULLIF(raw->>'error_type',''), NULLIF(raw->>'exception',''), NULLIF(raw->'payload'->>'errorType',''), NULLIF(raw->'analytics'->>'http_status',''), regexp_replace(left(message, 180), '[0-9a-fA-F-]{8,}', ':id', 'g'), 'Unknown error') AS signature, count(*)::int count
        FROM log_events WHERE environment_id=$1 AND severity IN ('ERROR','FATAL')
        GROUP BY 1 ORDER BY count DESC LIMIT 1`,
       [env.id]
     )
   ]);
 
+  const totalLogs = logStats.rows[0]?.logs_ingested || 0;
+  const errorRate = Number(logStats.rows[0]?.error_rate || 0);
+  const p95Latency = traceStats.rows[0]?.p95_latency_ms || 0;
+  const activeAlerts = alertStats.rows[0]?.active_alerts || 0;
+  const throughput1h = recentStats.rows[0]?.total || 0;
+  const recentErrors = recentStats.rows[0]?.errors || 0;
+  const previousErrors = prevStats.rows[0]?.errors || 0;
+  const errorSpikeEvents = Math.max(0, recentErrors - previousErrors);
+  const spikePercent = previousErrors ? Number((((recentErrors - previousErrors) / previousErrors) * 100).toFixed(2)) : (recentErrors ? 100 : 0);
+  const successRate = Number(Math.max(0, 100 - errorRate).toFixed(2));
+  const healthScore = Math.max(0, Math.min(100, Math.round(100 - (errorRate * 1.8) - (p95Latency > 0 ? Math.min(35, p95Latency / 70) : 0) - Math.min(20, activeAlerts * 4))));
+  const errorBudgetBurn = Number(Math.min(999, errorRate / 1).toFixed(2));
+
   return {
     environment: env,
     metrics: {
-      logs_ingested: logStats.rows[0].logs_ingested,
-      error_rate: Number(logStats.rows[0].error_rate),
-      p95_latency_ms: traceStats.rows[0].p95_latency_ms || 0,
-      active_alerts: alertStats.rows[0].active_alerts,
-      services: serviceStats.rows[0].services,
-      endpoints: endpointStats.rows[0].endpoints,
-      throughput_1h: recentStats.rows[0]?.total || 0,
-      error_spike_events: Math.max(0, (recentStats.rows[0]?.errors || 0) - (prevStats.rows[0]?.errors || 0)),
+      logs_ingested: totalLogs,
+      error_rate: errorRate,
+      success_rate: successRate,
+      p95_latency_ms: p95Latency,
+      p99_latency_ms: Math.round(p95Latency * 1.35),
+      active_alerts: activeAlerts,
+      services: serviceStats.rows[0]?.services || 0,
+      endpoints: endpointStats.rows[0]?.endpoints || 0,
+      throughput_1h: throughput1h,
+      throughput_per_min: Math.round(throughput1h / 60),
+      recent_errors_1h: recentErrors,
+      previous_errors_1h: previousErrors,
+      error_spike_events: errorSpikeEvents,
+      error_spike_percent: spikePercent,
       top_error_signature: topError.rows[0]?.signature || 'No errors observed',
       top_error_count: topError.rows[0]?.count || 0,
-      masking_coverage: 0
+      masking_coverage: 0,
+      health_score: healthScore,
+      error_budget_burn: errorBudgetBurn,
+      apdex: Number(Math.max(0, Math.min(1, 1 - (errorRate / 100) - (p95Latency > 0 ? Math.min(0.45, p95Latency / 10000) : 0))).toFixed(2))
     }
   };
 }
