@@ -1042,7 +1042,7 @@ export async function getTopology(workspaceSlug, environmentName) {
 function buildTopologyResponse(rows) {
   const nodeMap = new Map();
   const edgeMap = new Map();
-  const byTrace = new Map();
+
   const clean = (v) => String(v || '').replace(/\.xml(:[0-9]+)?$/i, '').trim();
   const normalizePath = (v) => {
     let s = String(v || '').trim();
@@ -1051,95 +1051,97 @@ function buildTopologyResponse(rows) {
     s = s.split('?')[0].replace(/\/+/g, '/');
     return s.startsWith('/') ? s : `/${s}`;
   };
+  const methodOf = (r) => clean(r.method || r.raw?.method || r.raw?.http_method || r.raw?.analytics?.method || '').toUpperCase();
+  const pathOf = (r) => normalizePath(r.path || r.raw?.path || r.raw?.endpoint || r.raw?.request_uri || r.raw?.analytics?.request_uri);
   const endpointLabel = (r) => {
-    const path = normalizePath(r.path || r.raw?.path || r.raw?.endpoint || r.raw?.request_uri || r.raw?.analytics?.request_uri);
-    const method = clean(r.method || r.raw?.method || r.raw?.http_method || r.raw?.analytics?.method || '').toUpperCase();
-    const svc = clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
+    const path = pathOf(r);
+    const method = methodOf(r);
     if (path) return `${method || 'ANY'} ${path}`;
-    return svc;
+    return clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
   };
-  const nodeId = (label, service='') => `${clean(service)||'api'}::${label}`;
+  const endpointId = (label) => `endpoint::${label}`;
+  const dependencyId = (label) => `dependency::${label}`;
   const isError = (r) => {
     const sev = String(r.severity || '').toUpperCase();
-    const status = Number(r.http_status || r.raw?.http_status || r.raw?.status_code || 0);
-    return ['ERROR','FATAL'].includes(sev) || (status >= 400);
+    const status = Number(r.http_status || r.raw?.http_status || r.raw?.status_code || r.raw?.analytics?.http_status || 0);
+    return ['ERROR','FATAL'].includes(sev) || status >= 400;
   };
   const latency = (r) => Number(r.latency_ms || r.raw?.latency_ms || r.raw?.duration_ms || r.raw?.response_time_ms || r.raw?.analytics?.latency_ms || 0);
-  const traceIdOf = (r, i) => r.trace_id || r.raw?.trace_id || r.raw?.correlation_id || r.raw?.event_id || r.raw?.transaction_id || `single-${i}`;
 
-  const extractDownstreams = (message='') => {
-    const text = String(message || '');
-    const found = [];
-    const patterns = [
-      /(?:before\s+request\s+to|request\s+to|outbound\s+call\s+to|calling)\s+([^\s,;\]\)]+)/ig,
-      /https?:\/\/[^\s,;\]\)]+/ig,
-      /(?:GET|POST|PUT|PATCH|DELETE)\s+(\/[^\s,;\]\)]+)/ig
-    ];
-    for (const re of patterns) {
-      let m; while ((m = re.exec(text)) !== null) found.push(m[1] || m[0]);
+  const friendlyDependency = (rawValue) => {
+    let raw = String(rawValue || '').replace(/["'<>]/g,'').trim();
+    if (!raw) return null;
+    raw = raw.replace(/[.,;:)]+$/,'');
+    let host = '', path = '', label = raw;
+    try {
+      const u = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+      host = u.hostname.replace(/^www\./,'');
+      path = (u.pathname && u.pathname !== '/') ? u.pathname.replace(/\/+/g,'/') : '';
+      label = `${host}${path}`;
+    } catch {
+      label = raw.replace(/\s+/g,' ').replace(/\s+api$/i,' API');
     }
-    return found.map(v => {
-      let raw = String(v || '').replace(/["'<>]/g,'').trim();
-      if (!raw) return null;
-      let label = raw;
-      try {
-        const u = new URL(raw);
-        label = `${u.hostname}${u.pathname && u.pathname !== '/' ? u.pathname : ''}`;
-      } catch {
-        label = raw.replace(/\s+api$/i,' API');
-      }
-      label = label.replace(/[.,;:]$/,'');
-      // Avoid creating nodes for internal Mule flow names; keep URL/path/API endpoints only.
-      if (!/^https?:/i.test(raw) && !raw.startsWith('/') && !/api|service|endpoint|salesforce|secops|pdf|payment|bank|host/i.test(label)) return null;
-      return label;
-    }).filter(Boolean).slice(0,4);
+    // Keep API/endpoint dependencies only. Reject Mule flow names, Java classes, validation notes, and generic text.
+    const looksLikeEndpoint = label.startsWith('/') || /\b(api|service|endpoint|salesforce|secops|pdf|payment|bank|gateway|rest|soap|http)\b/i.test(label) || /\.[a-z]{2,}(\/|$)/i.test(label);
+    const looksLikeNoise = /^(flow|subflow|logger|transform|choice|foreach|until-successful|validation|payload|variable|vars\.)/i.test(label) || label.length > 120;
+    if (!looksLikeEndpoint || looksLikeNoise) return null;
+    return label;
   };
 
-  rows.forEach((r,i) => {
-    const tid = traceIdOf(r,i);
-    if (!byTrace.has(tid)) byTrace.set(tid, []);
-    byTrace.get(tid).push(r);
-  });
+  const extractDownstreams = (r) => {
+    const raw = r.raw || {};
+    const text = [r.message, raw.message, raw.log, raw.detail, raw.error_message, raw.analytics?.message].filter(Boolean).join(' | ');
+    const found = [];
+    const explicitFields = [raw.downstream, raw.downstream_url, raw.target_url, raw.target_endpoint, raw.backend_url, raw.external_url, raw.request_url, raw.url, raw.uri, raw.host, raw.hostname];
+    explicitFields.flat().filter(Boolean).forEach(x => found.push(String(x)));
+
+    const patterns = [
+      /(?:before\s+request\s+to|after\s+request\s+to|request\s+to|outbound\s+call\s+to|calling|invoke(?:ing)?|target(?:ing)?|backend(?:\s+url)?[:=])\s+([a-z]+:\/\/[^\s,;\])}]+|[\w.-]+\.[a-z]{2,}(?:\/[^\s,;\])}]+)?|\/[A-Za-z0-9_./-]+)/ig,
+      /(https?:\/\/[^\s,;\])}]+)/ig,
+      /\b(GET|POST|PUT|PATCH|DELETE)\s+(https?:\/\/[^\s,;\])}]+|\/[A-Za-z0-9_./-]+)/ig
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) found.push(m[2] || m[1]);
+    }
+    return [...new Set(found.map(friendlyDependency).filter(Boolean))].slice(0,6);
+  };
 
   const ensureNode = (id, label, extra={}) => {
-    const n = nodeMap.get(id) || { id, label, type:'endpoint', calls:0, errors:0, latency:[], ...extra };
-    n.calls += extra.bump === false ? 0 : 1;
+    const n = nodeMap.get(id) || { id, label, type: extra.type || 'endpoint', is_external: !!extra.is_external, calls:0, errors:0, latency:[] };
+    if (extra.bump !== false) n.calls += 1;
     if (extra.error) n.errors += 1;
     if (extra.latency_ms > 0) n.latency.push(Number(extra.latency_ms));
     n.type = extra.type || n.type;
-    n.is_external = extra.is_external || n.is_external || false;
+    n.is_external = !!(n.is_external || extra.is_external);
     nodeMap.set(id,n);
     return n;
   };
   const addEdge = (from, to, label='', r={}) => {
     if (!from || !to || from === to) return;
-    const key = `${from}->${to}:${label}`;
+    const key = `${from}->${to}`;
     const e = edgeMap.get(key) || { from, to, label, calls:0, errors:0, latency:[], samples:[] };
     e.calls += 1;
     if (isError(r)) e.errors += 1;
     const ms = latency(r); if (ms > 0) e.latency.push(ms);
+    if (label && (!e.label || e.label === 'dependency')) e.label = label;
     if (r.message && e.samples.length < 3) e.samples.push(String(r.message).slice(0,180));
     edgeMap.set(key,e);
   };
 
-  for (const events of byTrace.values()) {
-    const ordered = [...events].sort((a,b)=>new Date(a.timestamp||0)-new Date(b.timestamp||0));
-    let prevEndpointId = null;
-    for (const r of ordered) {
-      const label = endpointLabel(r);
-      const svc = clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
-      const id = nodeId(label, svc);
-      ensureNode(id, label, { service_name: svc, type:'endpoint', error:isError(r), latency_ms:latency(r) });
-      if (prevEndpointId && prevEndpointId !== id) addEdge(prevEndpointId, id, label, r);
-      const downstreams = extractDownstreams(r.message || r.raw?.message || '');
-      for (const d of downstreams) {
-        const did = `external::${d}`;
-        ensureNode(did, d, { type:'external', is_external:true, bump:false });
-        addEdge(id, did, normalizePath(d) || d, r);
-      }
-      prevEndpointId = id;
+  // Endpoint-only model: every observed API endpoint becomes a node. Edges are created only when logs explicitly mention a downstream API/URL.
+  // This avoids fake chains between unrelated endpoints that happen to share a missing/default trace id.
+  rows.forEach((r) => {
+    const label = endpointLabel(r);
+    if (!label || label === 'observed-api') return;
+    const id = endpointId(label);
+    ensureNode(id, label, { type:'endpoint', error:isError(r), latency_ms:latency(r) });
+    for (const dep of extractDownstreams(r)) {
+      const did = dependencyId(dep);
+      ensureNode(did, dep, { type:'dependency', is_external:true, bump:false });
+      addEdge(id, did, dep, r);
     }
-  }
+  });
 
   const percentile = (arr, p) => {
     const a = [...arr].filter(x=>Number.isFinite(x)).sort((x,y)=>x-y);
@@ -1162,7 +1164,7 @@ function buildTopologyResponse(rows) {
       p95_latency_ms:p95,
       status: er >= 5 ? 'down' : (er > 0 || p95 > 1500 ? 'degraded' : 'healthy')
     };
-  });
+  }).sort((a,b)=>Number(a.is_external)-Number(b.is_external) || b.calls-a.calls || a.label.localeCompare(b.label));
   const edges = [...edgeMap.values()].map(e => {
     const er = e.calls ? (e.errors / e.calls) * 100 : 0;
     return {
@@ -1178,8 +1180,8 @@ function buildTopologyResponse(rows) {
       samples:e.samples
     };
   }).sort((a,b)=>b.calls-a.calls);
-  const totalCalls = edges.reduce((a,e)=>a+e.calls,0) || nodes.reduce((a,n)=>a+n.calls,0);
-  const totalErrors = edges.reduce((a,e)=>a+Math.round(e.calls*e.error_rate/100),0);
+  const totalCalls = nodes.filter(n=>!n.is_external).reduce((a,n)=>a+n.calls,0);
+  const totalErrors = nodes.filter(n=>!n.is_external).reduce((a,n)=>a+Math.round(n.calls*n.error_rate/100),0);
   return {
     nodes,
     edges,
@@ -1187,7 +1189,7 @@ function buildTopologyResponse(rows) {
       total_calls: totalCalls,
       dependencies: edges.length,
       error_rate: totalCalls ? Number(((totalErrors/totalCalls)*100).toFixed(2)) : 0,
-      avg_latency_ms: avg(edges.map(e=>e.avg_latency_ms).filter(Boolean))
+      avg_latency_ms: avg(nodes.map(n=>n.avg_latency_ms).filter(Boolean))
     }
   };
 }

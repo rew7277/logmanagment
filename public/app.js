@@ -50,6 +50,9 @@ function setPage(page){
   state.page=(page==='traces'?'logs':(page==='endpoints'?'apis':(page||'overview')));
   $$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));
   $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));
+  // Stop topology animation when leaving the topology page. This prevents hidden canvas redraws
+  // and removes the UI jitter seen while navigating to AI RCA / API Docs / Settings.
+  if (state.page !== 'topology' && topoAnimFrame) { cancelAnimationFrame(topoAnimFrame); topoAnimFrame = null; }
   const titles={
     overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',
     uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',
@@ -1370,105 +1373,145 @@ async function buildTopoFromLogs(force=false){
 
 function layoutTopo(canvas){
   const rect=canvas.getBoundingClientRect();
-  const W=rect.width||canvas.width,H=rect.height||canvas.height;
+  const W=rect.width||canvas.width||1000, H=rect.height||canvas.height||520;
   if(!topoNodes.length) return;
-  const incoming=new Map(), outgoing=new Map();
-  topoNodes.forEach(n=>{incoming.set(n.id,0);outgoing.set(n.id,[]);});
-  topoEdges.forEach(e=>{incoming.set(e.to,(incoming.get(e.to)||0)+1); outgoing.get(e.from)?.push(e.to);});
-  const roots=topoNodes.filter(n=>(incoming.get(n.id)||0)===0 && !n.isExternal);
-  const start=roots.length?roots:topoNodes.filter(n=>!n.isExternal).slice(0,1);
-  const level=new Map();
-  const q=start.map(n=>{level.set(n.id,0);return n.id;});
-  while(q.length){
-    const id=q.shift(); const next=(level.get(id)||0)+1;
-    (outgoing.get(id)||[]).forEach(to=>{ if(!level.has(to)||level.get(to)<next){level.set(to,next);q.push(to);} });
-  }
-  topoNodes.forEach(n=>{ if(!level.has(n.id)) level.set(n.id,n.isExternal?2:0); });
-  const groups={};
-  topoNodes.forEach(n=>{const l=level.get(n.id)||0;(groups[l]||(groups[l]=[])).push(n);});
-  const levels=Object.keys(groups).map(Number).sort((a,b)=>a-b);
-  const marginX=85, marginY=70;
-  const usableW=Math.max(280,W-marginX*2);
-  const stepX=levels.length>1?usableW/(levels.length-1):0;
-  levels.forEach((lvl,li)=>{
-    const arr=groups[lvl].sort((a,b)=>(b.calls||0)-(a.calls||0));
-    const stepY=Math.min(135, Math.max(74,(H-marginY*2)/Math.max(1,arr.length-1||1)));
-    const blockH=stepY*(arr.length-1);
-    arr.forEach((node,i)=>{
-      node.x=marginX + li*stepX;
-      node.y=Math.max(55, Math.min(H-45, H/2 - blockH/2 + i*stepY));
-    });
+
+  const endpointNodes = topoNodes.filter(n=>!n.isExternal).sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
+  const depNodes = topoNodes.filter(n=>n.isExternal).sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
+  const connectedDeps = new Set(topoEdges.map(e=>e.to));
+  const connectedEndpoints = new Set(topoEdges.map(e=>e.from));
+
+  const placeColumn = (arr, x, top=64, bottom=64) => {
+    if(!arr.length) return;
+    const usable=Math.max(120,H-top-bottom);
+    const step=arr.length===1?0:Math.min(72, usable/(arr.length-1));
+    const total=step*(arr.length-1);
+    const y0=H/2-total/2;
+    arr.forEach((n,i)=>{ n.x=x; n.y=Math.max(42,Math.min(H-42,y0+i*step)); });
+  };
+
+  // Endpoint-only service map: API endpoints on the left, downstream API dependencies on the right.
+  // This avoids misleading diagonal spaghetti and makes the flow direction obvious.
+  const leftX = Math.max(90, Math.min(210, W*0.16));
+  const rightX = Math.max(leftX+260, W-110);
+  placeColumn(endpointNodes, leftX, 54, 54);
+  placeColumn(depNodes, rightX, 74, 74);
+
+  // Pull frequently connected dependencies slightly toward their source vertical center.
+  depNodes.forEach(dep=>{
+    const incoming=topoEdges.filter(e=>e.to===dep.id).map(e=>topoNodes.find(n=>n.id===e.from)).filter(Boolean);
+    if(incoming.length){
+      const weighted=incoming.reduce((a,n)=>a+n.y,0)/incoming.length;
+      dep.y=Math.max(42,Math.min(H-42,weighted));
+    }
   });
+
+  // If a node has no dependencies yet, keep it visible but slightly muted in the same API lane.
+  endpointNodes.forEach(n=>{ n.orphan=!connectedEndpoints.has(n.id); });
+  depNodes.forEach(n=>{ n.orphan=!connectedDeps.has(n.id); });
 }
 
 function drawTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
+  if(state.page !== 'topology'){ if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} return; }
   const ctx=canvas.getContext('2d');
   const dpr=window.devicePixelRatio||1;
   const rect=canvas.getBoundingClientRect();
-  if(canvas.width!==Math.round(rect.width*dpr)||canvas.height!==Math.round(rect.height*dpr)){
-    canvas.width=Math.round(rect.width*dpr); canvas.height=Math.round(rect.height*dpr);
+  if(!rect.width || !rect.height) return;
+  const desiredW=Math.round(rect.width*dpr), desiredH=Math.round(rect.height*dpr);
+  if(canvas.width!==desiredW||canvas.height!==desiredH){
+    canvas.width=desiredW; canvas.height=desiredH;
     ctx.setTransform(dpr,0,0,dpr,0,0);
     layoutTopo(canvas);
   }
   const W=rect.width,H=rect.height;
   ctx.clearRect(0,0,W,H);
   const isDark=document.documentElement.classList.contains('dark');
+
+  // Stable background and column headers
+  ctx.save();
+  ctx.fillStyle=isDark?'rgba(2,6,23,.12)':'rgba(248,250,252,.70)';
+  roundRect(ctx,10,10,W-20,H-20,18); ctx.fill();
+  ctx.font='900 11px DM Sans,system-ui'; ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillStyle=isDark?'#94a3b8':'#64748b';
+  ctx.fillText('OBSERVED API ENDPOINTS',24,24);
+  ctx.textAlign='right'; ctx.fillText('DOWNSTREAM API DEPENDENCIES',W-24,24);
+  ctx.restore();
+
   if(!topoNodes.length){ctx.fillStyle=isDark?'#94a3b8':'#64748b';ctx.font='700 14px DM Sans,system-ui';ctx.textAlign='center';ctx.fillText('No topology yet. Upload logs with endpoint paths and downstream request messages.',W/2,H/2);return;}
+  if(!topoEdges.length){
+    ctx.fillStyle=isDark?'#94a3b8':'#64748b';ctx.font='700 13px DM Sans,system-ui';ctx.textAlign='center';
+    ctx.fillText('Endpoints were detected, but no downstream API calls were found in the log messages.',W/2,52);
+  }
   const now=performance.now();
-  topoEdges.forEach(e=>{
-    const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to); if(!from||!to) return;
+  const nodeById=new Map(topoNodes.map(n=>[n.id,n]));
+
+  topoEdges.forEach((e,idx)=>{
+    const from=nodeById.get(e.from), to=nodeById.get(e.to); if(!from||!to) return;
     const degraded=e.errorRate>1||e.status==='error';
-    const cx=(from.x+to.x)/2, cy=(from.y+to.y)/2-28;
+    const bend=Math.max(120,Math.abs(to.x-from.x)*0.44);
+    const c1x=from.x+bend, c1y=from.y;
+    const c2x=to.x-bend, c2y=to.y;
     ctx.save();
-    ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.quadraticCurveTo(cx,cy,to.x,to.y);
+    ctx.beginPath(); ctx.moveTo(from.x+28,from.y); ctx.bezierCurveTo(c1x,c1y,c2x,c2y,to.x-28,to.y);
     const grad=ctx.createLinearGradient(from.x,from.y,to.x,to.y);
-    grad.addColorStop(0,degraded?'rgba(244,63,94,.70)':'rgba(59,130,246,.50)');
-    grad.addColorStop(1,degraded?'rgba(251,113,133,.95)':'rgba(34,211,238,.85)');
-    ctx.strokeStyle=grad; ctx.lineWidth=Math.max(1.5,Math.min(7,1+Math.log10((e.calls||1)+1)*2));
+    grad.addColorStop(0,degraded?'rgba(244,63,94,.72)':'rgba(59,130,246,.48)');
+    grad.addColorStop(1,degraded?'rgba(251,113,133,.95)':'rgba(34,211,238,.88)');
+    ctx.strokeStyle=grad; ctx.lineWidth=Math.max(1.6,Math.min(6,1+Math.log10((e.calls||1)+1)*1.8));
     ctx.setLineDash(degraded?[7,5]:[]); ctx.stroke(); ctx.setLineDash([]);
-    // arrow head
-    const angle=Math.atan2(to.y-cy,to.x-cx), ax=to.x-24*Math.cos(angle), ay=to.y-24*Math.sin(angle);
+
+    // arrowhead
+    const angle=Math.atan2(to.y-c2y,to.x-c2x), ax=to.x-31*Math.cos(angle), ay=to.y-31*Math.sin(angle);
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax-9*Math.cos(angle-.42),ay-9*Math.sin(angle-.42)); ctx.lineTo(ax-9*Math.cos(angle+.42),ay-9*Math.sin(angle+.42)); ctx.closePath();
     ctx.fillStyle=degraded?'#fb7185':'#38bdf8'; ctx.fill();
-    // animated traffic packet
-    const t=((now/1400)+(e.calls%13)/13)%1;
-    const x=(1-t)*(1-t)*from.x+2*(1-t)*t*cx+t*t*to.x;
-    const y=(1-t)*(1-t)*from.y+2*(1-t)*t*cy+t*t*to.y;
-    ctx.beginPath(); ctx.arc(x,y,degraded?4.5:3.5,0,Math.PI*2); ctx.fillStyle=degraded?'#fecdd3':'#bfdbfe'; ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
-    // edge label
+
+    // animated packet using cubic Bezier
+    const t=((now/1700)+(idx%11)/11)%1;
+    const mt=1-t;
+    const x=mt*mt*mt*(from.x+28)+3*mt*mt*t*c1x+3*mt*t*t*c2x+t*t*t*(to.x-28);
+    const y=mt*mt*mt*from.y+3*mt*mt*t*c1y+3*mt*t*t*c2y+t*t*t*to.y;
+    ctx.beginPath(); ctx.arc(x,y,degraded?4.6:3.8,0,Math.PI*2); ctx.fillStyle=degraded?'#fecdd3':'#dbeafe'; ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
+
+    // edge label positioned near the clean middle of the route
+    const lx=(from.x+to.x)/2, ly=(from.y+to.y)/2 - 12;
     const label=e.label||`${fmt(e.calls)} calls`;
     ctx.font='800 10px DM Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    const tw=ctx.measureText(label).width+16;
-    ctx.fillStyle=isDark?'rgba(2,6,23,.75)':'rgba(255,255,255,.88)'; roundRect(ctx,cx-tw/2,cy-12,tw,22,11); ctx.fill();
-    ctx.fillStyle=degraded?'#fb7185':(isDark?'#dbeafe':'#1e40af'); ctx.fillText(label,cx,cy);
+    const safeLabel=label.length>42?label.slice(0,39)+'…':label;
+    const tw=ctx.measureText(safeLabel).width+16;
+    ctx.fillStyle=isDark?'rgba(2,6,23,.80)':'rgba(255,255,255,.92)'; roundRect(ctx,lx-tw/2,ly-11,tw,22,11); ctx.fill();
+    ctx.strokeStyle=isDark?'rgba(148,163,184,.18)':'rgba(37,99,235,.15)'; ctx.stroke();
+    ctx.fillStyle=degraded?'#fb7185':(isDark?'#dbeafe':'#1e40af'); ctx.fillText(safeLabel,lx,ly);
     ctx.restore();
   });
+
   topoNodes.forEach(node=>{
     const statusColor=node.isExternal?topoColors.external:(topoColors[node.status]||topoColors.unknown);
     const isSelected=topoSelected===node.id;
-    const r=isSelected?29:24;
+    const r=isSelected?25:21;
     ctx.save(); ctx.translate(node.x,node.y);
+    const alpha=node.orphan ? .58 : 1;
+    ctx.globalAlpha=alpha;
     if(isSelected||node.status==='degraded'||node.status==='down'){
-      const pulse=6+Math.sin(now/260)*3;
-      ctx.beginPath(); ctx.arc(0,0,r+pulse,0,Math.PI*2); ctx.strokeStyle=statusColor; ctx.lineWidth=2; ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1;
+      const pulse=5+Math.sin(now/360)*2;
+      ctx.beginPath(); ctx.arc(0,0,r+pulse,0,Math.PI*2); ctx.strokeStyle=statusColor; ctx.lineWidth=2; ctx.globalAlpha=.28; ctx.stroke(); ctx.globalAlpha=alpha;
     }
-    ctx.shadowColor=statusColor; ctx.shadowBlur=isSelected?26:14;
+    ctx.shadowColor=statusColor; ctx.shadowBlur=isSelected?22:11;
     const grad=ctx.createRadialGradient(-7,-8,3,0,0,r);
     grad.addColorStop(0,isDark?'#1e293b':'#ffffff'); grad.addColorStop(1,isDark?'#020617':'#eff6ff');
     ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill(); ctx.lineWidth=isSelected?3:2; ctx.strokeStyle=statusColor; ctx.stroke(); ctx.shadowBlur=0;
-    ctx.beginPath(); ctx.arc(r*.64,-r*.64,5,0,Math.PI*2); ctx.fillStyle=statusColor; ctx.fill();
-    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12:11}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.beginPath(); ctx.arc(r*.62,-r*.62,4.6,0,Math.PI*2); ctx.fillStyle=statusColor; ctx.fill();
+    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12:10.5}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(shortNodeLabel(node.label),0,-2);
-    ctx.font='800 9px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} calls · ${fmtMs(node.p95)}`,0,r+15);
+    ctx.font='800 8.5px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} calls · ${fmtMs(node.p95)}`,0,r+13);
     ctx.restore();
   });
   topoAnimFrame=requestAnimationFrame(drawTopo);
 }
 
 function shortNodeLabel(v){
-  const s=String(v||'').replace(/^https?:\/\//,'').replace(/^\/+/,'');
-  return s.length>15?s.slice(0,14)+'…':s;
+  let s=String(v||'').replace(/^https?:\/\//,'').replace(/^endpoint::/,'').replace(/^dependency::/,'').replace(/^\/+/,'');
+  s=s.replace(/^(GET|POST|PUT|PATCH|DELETE|ANY)\s+\//,'$1 /');
+  return s.length>17?s.slice(0,16)+'…':s;
 }
 function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
@@ -1488,7 +1531,7 @@ async function initTopo(){
     if(hit){topoSelected=hit.id;showTopoDetail(hit);} else {topoSelected=null;if($('topoDetail'))$('topoDetail').hidden=true;}
   };
   renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
-  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{topoLoadedKey='';await buildTopoFromLogs(true);layoutTopo(canvas);renderDepMatrix();renderCriticalPaths();renderTopoRcaPanel();};
+  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{topoLoadedKey=''; if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} await buildTopoFromLogs(true);layoutTopo(canvas);renderDepMatrix();renderCriticalPaths();renderTopoRcaPanel();drawTopo();};
 }
 
 function showTopoDetail(node){

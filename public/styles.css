@@ -1832,3 +1832,27 @@ canvas#topoCanvas { cursor: crosshair; }
 .topo-rca-panel .warn{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
 .topo-rca-panel .ok{border-color:rgba(16,185,129,.28);background:rgba(16,185,129,.07)}
 @media(max-width:900px){.topo-metrics-overlay{grid-template-columns:repeat(2,1fr)}}
+
+/* V30 stability + topology readability fixes */
+html { scrollbar-gutter: stable; }
+html, body { min-height: 100%; overflow-x: hidden; }
+.page { min-width: 0; }
+.page:not(.active) { display: none !important; }
+.page.active { display: block !important; animation: none !important; }
+.topology-card { overflow: visible !important; }
+.topo-canvas {
+  height: 520px !important;
+  min-height: 520px !important;
+  max-height: 520px !important;
+  width: 100% !important;
+  contain: layout paint size;
+  background:
+    linear-gradient(90deg, rgba(59,130,246,.035), rgba(14,165,233,.02)),
+    radial-gradient(circle at 18% 50%, rgba(59,130,246,.08), transparent 36%),
+    radial-gradient(circle at 86% 50%, rgba(139,92,246,.07), transparent 34%) !important;
+}
+.topo-metrics-overlay { align-items: stretch; }
+.topo-metric { background: rgba(255,255,255,.72) !important; }
+.dark .topo-metric { background: rgba(15,23,42,.42) !important; }
+.nav-item, .card, .page, .content, .sidebar { backface-visibility: hidden; }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
