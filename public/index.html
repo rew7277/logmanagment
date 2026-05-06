@@ -41,15 +41,22 @@
         <a class="nav-item" href="#topology" data-page-link="topology"><span class="icon" data-icon="topology"></span><span class="label">Topology</span></a>
         <a class="nav-item" href="#settings" data-page-link="settings"><span class="icon" data-icon="settings"></span><span class="label">Settings</span></a>
       </nav>
-      <!-- User info chip -->
-      <div class="user-chip" id="userChip" hidden>
+      <!-- Flex spacer pushes user section to bottom -->
+      <div class="sidebar-spacer"></div>
+      <!-- System status strip -->
+      <div class="sidebar-status-strip">
+        <span class="status-dot"></span>
+        <span>All systems operational</span>
+      </div>
+      <!-- User chip: click opens Settings -->
+      <div class="user-chip" id="userChip" hidden onclick="setPage('settings')" title="Open Settings">
         <div class="user-avatar" id="userAvatar">?</div>
         <div class="user-chip-info">
           <strong id="userChipName">User</strong>
-          <small id="userChipRole">Viewer</small>
+          <small id="userChipRole">Viewer &middot; Settings &rarr;</small>
         </div>
       </div>
-      <div class="product-rule"><strong>Tenant rule</strong><p>Org → Workspace → Environment → Service → Endpoint → Trace → Logs.</p></div>
+      <div class="product-rule"></div>
     </aside>
     <main class="content">
       <header class="topbar"><div><p class="eyebrow"><span class="dot"></span> Workspace / Environment scoped</p><h2 id="pageTitle">Overview</h2></div><div class="top-actions" id="topActions"><button id="askRcaBtn">Ask AI RCA</button></div></header>

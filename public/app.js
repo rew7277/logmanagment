@@ -1411,19 +1411,27 @@ function layoutTopo(canvas){
   depNodes.forEach(n=>{ n.orphan=!connectedDeps.has(n.id); });
 }
 
+// Stable canvas size — set once, not on every frame
+let _topoCanvasW=0, _topoCanvasH=0, _topoDpr=1;
+function syncTopoCanvas(canvas){
+  const dpr=window.devicePixelRatio||1;
+  const rect=canvas.getBoundingClientRect();
+  if(!rect.width||!rect.height) return false;
+  const dW=Math.round(rect.width*dpr), dH=Math.round(rect.height*dpr);
+  if(canvas.width!==dW||canvas.height!==dH){
+    canvas.width=dW; canvas.height=dH;
+    const ctx=canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+    _topoCanvasW=rect.width; _topoCanvasH=rect.height; _topoDpr=dpr;
+    layoutTopo(canvas);
+  }
+  return true;
+}
 function drawTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
   if(state.page !== 'topology'){ if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} return; }
+  if(!syncTopoCanvas(canvas)) { topoAnimFrame=requestAnimationFrame(drawTopo); return; }
   const ctx=canvas.getContext('2d');
-  const dpr=window.devicePixelRatio||1;
   const rect=canvas.getBoundingClientRect();
-  if(!rect.width || !rect.height) return;
-  const desiredW=Math.round(rect.width*dpr), desiredH=Math.round(rect.height*dpr);
-  if(canvas.width!==desiredW||canvas.height!==desiredH){
-    canvas.width=desiredW; canvas.height=desiredH;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    layoutTopo(canvas);
-  }
   const W=rect.width,H=rect.height;
   ctx.clearRect(0,0,W,H);
   const isDark=document.documentElement.classList.contains('dark');
@@ -1487,7 +1495,7 @@ function drawTopo(){
   topoNodes.forEach(node=>{
     const statusColor=node.isExternal?topoColors.external:(topoColors[node.status]||topoColors.unknown);
     const isSelected=topoSelected===node.id;
-    const r=isSelected?25:21;
+    const r=isSelected?28:23;
     ctx.save(); ctx.translate(node.x,node.y);
     const alpha=node.orphan ? .58 : 1;
     ctx.globalAlpha=alpha;
@@ -1500,25 +1508,46 @@ function drawTopo(){
     grad.addColorStop(0,isDark?'#1e293b':'#ffffff'); grad.addColorStop(1,isDark?'#020617':'#eff6ff');
     ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill(); ctx.lineWidth=isSelected?3:2; ctx.strokeStyle=statusColor; ctx.stroke(); ctx.shadowBlur=0;
     ctx.beginPath(); ctx.arc(r*.62,-r*.62,4.6,0,Math.PI*2); ctx.fillStyle=statusColor; ctx.fill();
-    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12:10.5}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12.5:11}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(shortNodeLabel(node.label),0,-2);
-    ctx.font='800 8.5px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} calls · ${fmtMs(node.p95)}`,0,r+13);
+    ctx.font='700 9px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} · ${fmtMs(node.p95)}`,0,r+14);
     ctx.restore();
   });
   topoAnimFrame=requestAnimationFrame(drawTopo);
 }
 
 function shortNodeLabel(v){
-  let s=String(v||'').replace(/^https?:\/\//,'').replace(/^endpoint::/,'').replace(/^dependency::/,'').replace(/^\/+/,'');
-  s=s.replace(/^(GET|POST|PUT|PATCH|DELETE|ANY)\s+\//,'$1 /');
-  return s.length>17?s.slice(0,16)+'…':s;
+  let s=String(v||'').replace(/^https?:\/\//,'').replace(/^endpoint::/,'').replace(/^dependency::/,'');
+  // Keep leading slash for paths, strip for hostnames
+  s=s.replace(/^(GET|POST|PUT|PATCH|DELETE|ANY)\s+/,'$1 ');
+  // If it's a hostname/external, abbreviate domain
+  if(!s.startsWith('/') && !s.match(/^[A-Z]+ \//) && s.includes('.')) {
+    const parts=s.split('.');
+    if(parts.length>=3) s=parts.slice(-2).join('.');
+  }
+  // Truncate long paths keeping method prefix
+  const match=s.match(/^([A-Z]+ )(.+)/);
+  if(match){
+    const method=match[1], path=match[2];
+    return path.length>14 ? method+path.slice(0,13)+'…' : s;
+  }
+  return s.length>20?s.slice(0,19)+'…':s;
 }
 function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
+let _topoResizeObserver=null;
 async function initTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
   if(topoAnimFrame) cancelAnimationFrame(topoAnimFrame);
+  // Use ResizeObserver for stable canvas resize — NOT inside RAF
+  if(_topoResizeObserver) _topoResizeObserver.disconnect();
+  _topoResizeObserver = new ResizeObserver(()=>{
+    // Only relayout, never resize canvas width/height here (done in syncTopoCanvas)
+    if(state.page==='topology') layoutTopo(canvas);
+  });
+  _topoResizeObserver.observe(canvas);
   await buildTopoFromLogs(false);
+  syncTopoCanvas(canvas);
   layoutTopo(canvas);
   if(state.topoHighlight){
     const match=topoNodes.find(n=>n.id===state.topoHighlight||n.label===state.topoHighlight);
@@ -1581,6 +1610,7 @@ function renderDepMatrix(){
   if(!topoEdges.length){el.innerHTML='<div class="empty">No dependency data yet. Upload logs with endpoint paths and downstream request messages.</div>';return;}
   el.innerHTML=topoEdges.slice(0,30).map(e=>{
     const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to);
+    if(!from||!to) return '';
     if(!from||!to) return '';
     return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:var(--text)">${esc(to.label)}</span><span class="level INFO" style="font-size:10px">${fmt(e.calls)} calls · ${fmtMs(e.p95)}</span></div>`;
   }).join('');

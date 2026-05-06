@@ -1856,3 +1856,372 @@ html, body { min-height: 100%; overflow-x: hidden; }
 .dark .topo-metric { background: rgba(15,23,42,.42) !important; }
 .nav-item, .card, .page, .content, .sidebar { backface-visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+
+/* ═══════════════════════════════════════════════════════════════════
+   V31 PREMIUM OVERHAUL — Anti-shake, topology clarity, sidebar UX
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── GLOBAL STABILITY: eliminate ALL layout-triggering animations ── */
+html { scroll-behavior: smooth; }
+
+/* Kill the page fade animation that causes content to shift/shake */
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.page.active { animation: fade .18s ease !important; transform: none !important; }
+
+/* Prevent ANY element from causing reflow during canvas RAF loop */
+.app-shell, .sidebar, .content, .topbar, .page {
+  transform: translateZ(0);
+  will-change: auto;
+}
+
+/* Remove hover transforms that cause shaking on nav items and buttons */
+.nav-item:hover { transform: none !important; }
+.danger-subtle:hover, .secondary:hover, .log-line:hover { transform: none !important; }
+
+/* ── SIDEBAR COMPLETE REDESIGN ── */
+.sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 0 !important;
+  background: linear-gradient(180deg, #fff 0%, rgba(248,250,255,0.97) 100%) !important;
+  border-right: 1px solid var(--line) !important;
+  box-shadow: 1px 0 24px rgba(40,57,100,.07) !important;
+}
+html.dark .sidebar {
+  background: linear-gradient(180deg, #0d1625 0%, #0a1220 100%) !important;
+  box-shadow: 1px 0 24px rgba(0,0,0,.28) !important;
+}
+
+/* Sidebar Header */
+.sidebar-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 20px 18px 0 !important;
+  flex-shrink: 0 !important;
+}
+.brand { margin-bottom: 0 !important; }
+.logo {
+  background: linear-gradient(135deg, #1a56db 0%, #7c3aed 60%, #06b6d4 100%) !important;
+  box-shadow: 0 6px 20px rgba(26,86,219,.32) !important;
+}
+
+/* Theme toggle — compact */
+.theme-toggle {
+  margin: 14px 14px 0 !important;
+  border-radius: 14px !important;
+  padding: 10px 14px !important;
+  background: rgba(51,92,255,.07) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--line) !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+}
+html.dark .theme-toggle {
+  background: rgba(96,165,250,.08) !important;
+  border-color: rgba(96,165,250,.18) !important;
+  color: var(--text) !important;
+}
+
+/* Tenant chip */
+.tenant-chip {
+  margin: 12px 14px 0 !important;
+}
+
+/* Nav section */
+.nav-title {
+  padding: 0 18px !important;
+  margin-top: 14px !important;
+  margin-bottom: 4px !important;
+  font-size: 10px !important;
+  letter-spacing: 1.6px !important;
+}
+.nav { padding: 0 10px !important; gap: 3px !important; }
+.nav-item {
+  height: 44px !important;
+  border-radius: 12px !important;
+  padding: 0 10px !important;
+  font-size: 13.5px !important;
+  font-weight: 750 !important;
+  transition: background .13s, color .13s !important;
+  transform: none !important;
+}
+.nav-item:hover {
+  background: rgba(51,92,255,.08) !important;
+  color: var(--primary) !important;
+  transform: none !important;
+  border-color: transparent !important;
+}
+.nav-item.active {
+  background: linear-gradient(135deg, rgba(51,92,255,.14), rgba(6,182,212,.07)) !important;
+  color: var(--primary) !important;
+  border-color: rgba(51,92,255,.18) !important;
+  font-weight: 900 !important;
+}
+.icon {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 10px !important;
+  background: rgba(51,92,255,.09) !important;
+}
+.nav-item.active .icon { background: rgba(51,92,255,.16) !important; }
+
+/* ── SIDEBAR BOTTOM: Utilize empty space below username ── */
+/* Push user chip to bottom using flex spacer */
+.sidebar-spacer {
+  flex: 1 1 auto;
+  min-height: 16px;
+}
+
+/* User chip — premium card design */
+.user-chip {
+  margin: 10px 14px !important;
+  padding: 14px 16px !important;
+  border-radius: 18px !important;
+  background: linear-gradient(135deg, rgba(51,92,255,.09), rgba(6,182,212,.06)) !important;
+  border: 1px solid rgba(51,92,255,.18) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  flex-shrink: 0 !important;
+  cursor: pointer !important;
+  transition: border-color .15s, box-shadow .15s !important;
+}
+.user-chip:hover {
+  border-color: rgba(51,92,255,.35) !important;
+  box-shadow: 0 8px 24px rgba(51,92,255,.12) !important;
+}
+.user-avatar {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 12px !important;
+  background: linear-gradient(135deg, #1a56db, #7c3aed) !important;
+  color: #fff !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  display: grid !important;
+  place-items: center !important;
+  flex-shrink: 0 !important;
+  box-shadow: 0 4px 12px rgba(26,86,219,.28) !important;
+}
+.user-chip-info strong {
+  display: block !important;
+  font-size: 13.5px !important;
+  font-weight: 850 !important;
+  color: var(--text) !important;
+  line-height: 1.2 !important;
+}
+.user-chip-info small {
+  display: block !important;
+  font-size: 11px !important;
+  color: var(--muted) !important;
+  font-weight: 800 !important;
+  margin-top: 2px !important;
+}
+
+/* Quick system status strip in sidebar footer */
+.sidebar-status-strip {
+  margin: 6px 14px 16px !important;
+  padding: 10px 14px !important;
+  border-radius: 14px !important;
+  background: rgba(15,159,110,.07) !important;
+  border: 1px solid rgba(15,159,110,.2) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-size: 11.5px !important;
+  font-weight: 850 !important;
+  color: #0f9f6e !important;
+  flex-shrink: 0 !important;
+}
+.sidebar-status-strip .status-dot {
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  background: #10b981 !important;
+  box-shadow: 0 0 0 3px rgba(16,185,129,.2) !important;
+  animation: statusPulse 2s ease-in-out infinite !important;
+  flex-shrink: 0 !important;
+}
+@keyframes statusPulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(16,185,129,.2); }
+  50% { box-shadow: 0 0 0 5px rgba(16,185,129,.08); }
+}
+html.dark .sidebar-status-strip {
+  background: rgba(16,185,129,.06) !important;
+  border-color: rgba(16,185,129,.15) !important;
+}
+
+/* Hide product-rule, use status strip instead */
+.product-rule { display: none !important; }
+
+/* Collapsed sidebar adjustments */
+.app-shell.sidebar-collapsed .sidebar-status-strip,
+.app-shell.sidebar-collapsed .user-chip-info,
+.app-shell.sidebar-collapsed .nav-title { display: none !important; }
+.app-shell.sidebar-collapsed .user-chip {
+  padding: 10px !important;
+  justify-content: center !important;
+  margin: 10px 8px !important;
+}
+.app-shell.sidebar-collapsed .user-chip-info { display: none !important; }
+.app-shell.sidebar-collapsed .sidebar-status-strip { display: none !important; }
+
+/* ── TOPOLOGY: Fix canvas shaking and improve flow display ── */
+.topology-card {
+  overflow: hidden !important;
+  position: relative !important;
+  padding: 20px !important;
+}
+
+/* Fixed canvas — NO height changes during animation */
+#topoCanvas, .topo-canvas {
+  display: block !important;
+  width: 100% !important;
+  height: 560px !important;
+  min-height: 560px !important;
+  max-height: 560px !important;
+  border-radius: 16px !important;
+  border: 1px solid var(--line) !important;
+  cursor: crosshair !important;
+  /* Prevent subpixel repainting from affecting parent layout */
+  contain: strict !important;
+  transform: translateZ(0) !important;
+  will-change: contents !important;
+  background:
+    radial-gradient(ellipse at 15% 50%, rgba(59,130,246,.06), transparent 40%),
+    radial-gradient(ellipse at 85% 50%, rgba(139,92,246,.05), transparent 40%),
+    linear-gradient(180deg, rgba(248,250,255,.98), rgba(241,245,255,.95)) !important;
+}
+html.dark #topoCanvas, html.dark .topo-canvas {
+  background:
+    radial-gradient(ellipse at 15% 50%, rgba(59,130,246,.08), transparent 40%),
+    radial-gradient(ellipse at 85% 50%, rgba(139,92,246,.07), transparent 40%),
+    linear-gradient(180deg, rgba(8,17,31,.98), rgba(10,20,40,.95)) !important;
+}
+
+/* Topo metrics bar */
+.topo-metrics-overlay {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(110px, 1fr)) !important;
+  gap: 10px !important;
+  margin: 0 0 14px !important;
+  align-items: stretch !important;
+}
+.topo-metric {
+  border: 1px solid var(--line) !important;
+  border-radius: 14px !important;
+  padding: 12px 14px !important;
+  background: rgba(255,255,255,.88) !important;
+  box-shadow: 0 1px 8px rgba(40,57,100,.06) !important;
+}
+html.dark .topo-metric {
+  background: rgba(10,20,40,.75) !important;
+  border-color: rgba(37,62,106,.5) !important;
+}
+.topo-metric small {
+  display: block !important;
+  color: var(--muted) !important;
+  font-size: 10px !important;
+  text-transform: uppercase !important;
+  letter-spacing: .1em !important;
+  font-weight: 900 !important;
+  margin-bottom: 5px !important;
+}
+.topo-metric b {
+  display: block !important;
+  font-size: 20px !important;
+  font-weight: 950 !important;
+  letter-spacing: -.5px !important;
+  color: var(--text) !important;
+}
+
+/* Topo legend */
+.topo-legend {
+  display: flex !important;
+  gap: 18px !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 12px !important;
+  padding: 10px 14px !important;
+  background: rgba(248,250,252,.8) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+}
+html.dark .topo-legend {
+  background: rgba(10,20,40,.5) !important;
+}
+
+/* Detail panel */
+.topo-detail-panel {
+  margin-top: 14px !important;
+  padding: 18px !important;
+  border: 1px solid rgba(59,130,246,.2) !important;
+  border-radius: 16px !important;
+  background: rgba(59,130,246,.04) !important;
+  box-shadow: 0 4px 20px rgba(59,130,246,.08) !important;
+}
+
+/* Dep matrix rows */
+#depMatrix .dep-row, #criticalPaths .dep-row {
+  display: grid !important;
+  grid-template-columns: 1fr auto 1fr auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+  margin-bottom: 8px !important;
+  font-size: 13px !important;
+  background: rgba(255,255,255,.55) !important;
+  transition: border-color .13s !important;
+}
+html.dark #depMatrix .dep-row, html.dark #criticalPaths .dep-row {
+  background: rgba(255,255,255,.03) !important;
+}
+
+/* ── TOPBAR & HEADER: Stop the header shake ── */
+.topbar {
+  margin-bottom: 22px !important;
+  padding: 0 !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 20 !important;
+  background: transparent !important;
+}
+
+/* ── CONTENT area: prevent scrollbar-induced shift ── */
+html { overflow-y: scroll; }
+
+/* ── CARD HOVER: no transform ── */
+.card { transition: box-shadow .15s !important; }
+.card:hover { transform: none !important; }
+
+/* ── PREMIUM TYPOGRAPHY UPGRADES ── */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+body { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif !important; }
+
+/* ── TOPBAR PREMIUM ── */
+.topbar h2 {
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  letter-spacing: -.6px !important;
+}
+
+/* ── RCA/ALERT CARDS: cleaner ── */
+.rca-action {
+  border-radius: 14px !important;
+  padding: 12px 14px !important;
+}
+
+/* ── RESPONSIVE TOPOLOGY ── */
+@media (max-width: 1100px) {
+  .topo-metrics-overlay { grid-template-columns: repeat(2, 1fr) !important; }
+  #topoCanvas, .topo-canvas { height: 440px !important; min-height: 440px !important; max-height: 440px !important; }
+}
+@media (max-width: 760px) {
+  #topoCanvas, .topo-canvas { height: 320px !important; min-height: 320px !important; max-height: 320px !important; }
+  .topo-metrics-overlay { grid-template-columns: 1fr 1fr !important; }
+}
