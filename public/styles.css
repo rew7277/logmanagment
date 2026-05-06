@@ -1420,3 +1420,33 @@ html:not(.dark) body { background: var(--bg); }
 .log-filter-toolbar{align-items:stretch;gap:8px}.log-filter-toolbar .search-control{min-width:240px;flex:1 1 360px}.log-filter-toolbar select{min-width:132px}.save-view-action{min-width:118px;height:40px;border-radius:13px;background:linear-gradient(135deg,rgba(14,165,233,.18),rgba(99,102,241,.16));color:#bfdbfe;border:1px solid rgba(96,165,250,.42);box-shadow:0 10px 28px rgba(37,99,235,.12);justify-content:center}.save-view-action span{display:inline!important}.save-view-action:hover{box-shadow:0 14px 34px rgba(37,99,235,.20)}
 @media(max-width:1180px){.pulse-visual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pulse-analytics-grid{grid-template-columns:1fr}}
 @media(max-width:760px){.pulse-visual-grid{grid-template-columns:1fr}.log-filter-toolbar{display:grid;grid-template-columns:1fr}.save-view-action{width:100%}}
+
+
+/* V38: light theme readability, professional save view, and pulse routing polish */
+.metric-card{color:var(--text)!important;background:var(--panel)!important;border-color:var(--line)!important}
+.metric-card h3,.metric-card p,.metric-card .tag{position:relative;z-index:1}
+.metric-card h3{color:var(--text)!important;font-weight:950}
+.metric-card p{color:var(--muted)!important}
+html:not(.dark) .metric-card{background:linear-gradient(180deg,#ffffff,#f8fbff)!important;box-shadow:0 18px 50px rgba(30,41,59,.09)!important}
+html:not(.dark) .metric-card:hover{box-shadow:0 22px 60px rgba(37,99,235,.14)!important}
+html:not(.dark) .pulse-gauge,html:not(.dark) .pulse-compare,html:not(.dark) .pulse-risk,html:not(.dark) .pulse-top-error{background:#ffffff!important;color:var(--text)!important;border-color:#dce6f5!important;box-shadow:0 12px 30px rgba(30,41,59,.07)!important}
+html:not(.dark) .pulse-gauge small,html:not(.dark) .pulse-compare span,html:not(.dark) .pulse-risk span,html:not(.dark) .pulse-top-error span{color:var(--muted)!important}
+html:not(.dark) .pulse-top-error p{color:var(--text)!important}
+html:not(.dark) .gauge-ring:after{background:#fff!important}
+html:not(.dark) .ai-insight{background:linear-gradient(135deg,rgba(51,92,255,.08),rgba(6,182,212,.06))!important}
+html:not(.dark) .ai-insight span{color:#475569!important}
+/* Log search toolbar: prevent Save view from being squeezed on desktop */
+.log-filter-toolbar{display:grid!important;grid-template-columns:minmax(280px,1.7fr) minmax(125px,.55fr) minmax(170px,.8fr) minmax(170px,.8fr) minmax(130px,.55fr) minmax(126px,.42fr) minmax(132px,.46fr) 44px;align-items:end!important;gap:10px!important}
+.log-filter-toolbar .search-control{min-width:0!important;width:100%!important}
+.log-filter-toolbar select{min-width:0!important;width:100%!important}
+.save-view-action{height:42px!important;min-width:132px!important;width:132px!important;padding:0 14px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:8px!important;border-radius:14px!important;background:linear-gradient(135deg,#2563eb,#7c3aed)!important;color:#fff!important;border:1px solid rgba(255,255,255,.16)!important;box-shadow:0 12px 26px rgba(37,99,235,.22)!important;font-size:12px!important;line-height:1!important;white-space:nowrap!important;overflow:visible!important}
+.save-view-action span{display:inline!important;color:#fff!important;white-space:nowrap!important}
+.save-view-action svg{flex:0 0 16px!important;width:16px!important;height:16px!important;stroke:#fff!important}
+.save-view-action:hover{transform:translateY(-1px)!important;box-shadow:0 16px 34px rgba(37,99,235,.28)!important}
+.icon-action{width:44px!important;height:42px!important;padding:0!important;display:inline-grid!important;place-items:center!important;border-radius:14px!important}
+@media(max-width:1280px){.log-filter-toolbar{grid-template-columns:minmax(260px,1fr) repeat(4,minmax(120px,1fr)) minmax(120px,auto) minmax(132px,auto) 44px}}
+@media(max-width:980px){.log-filter-toolbar{grid-template-columns:1fr 1fr!important}.save-view-action{width:100%!important;min-width:0!important}.icon-action{width:100%!important}.save-view-action span{display:inline!important}}
+@media(max-width:620px){.log-filter-toolbar{grid-template-columns:1fr!important}}
+/* Operational pulse click affordance */
+#overviewPulse [data-metric-action]{cursor:pointer}
+#overviewPulse [data-metric-action]:focus-visible,.metric-card:focus-visible,.save-view-action:focus-visible{outline:3px solid rgba(37,99,235,.35);outline-offset:3px}

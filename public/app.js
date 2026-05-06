@@ -144,7 +144,7 @@ function renderOverviewPulse(m){
       </button>
     </div>
     <div class="ai-insight"><b>AI investigation hint</b><span>${esc(buildInsight(m))}</span></div>`;
-  $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeFromMetric(btn.dataset.metricAction,m));
+  $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeMetric(btn.dataset.metricAction,m));
 }
 function pulseGauge(label,pct,value,tone,hint,action){
   const safePct=Math.max(0,Math.min(100,Number(pct||0)));
