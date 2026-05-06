@@ -19,7 +19,7 @@ import {
   bulkCreateLogs, createUploadRecord, deleteAllUploadHistory,
   deleteEnvironmentLogs, deleteUploadHistory, getAlerts, getEndpoints,
   getLogs, getOps, getOverview, getServices, getTraces, getUploadHistory,
-  getTraceDetail, getTopology, getErrorGroups, getDeployImpact,
+  getTraceDetail, getErrorGroups, getDeployImpact,
   getWorkspaces, rca, updateUploadRecord, runAnomalyDetection, getSavedSearches, createSavedSearch,
   getAlertRules, createAlertRule, evaluateAlertRules, getEnvironmentConfig, updateEnvironmentConfig, createEnvironment, listEnvironments, updateEnvironment, deleteEnvironment, upsertMaskingRule, deleteMaskingRule, resetEnvironmentPolicy, listIngestApiKeys, createIngestApiKey, revokeIngestApiKey, deleteIngestApiKey, getAuditLogs, testMaskingRules, verifyIngestApiKey, createManualApiEndpoint, deleteApiRegistryItem
 } from '../services/repository.js';
@@ -349,11 +349,6 @@ router.get('/:workspace/:environment/logs', asyncHandler(async (req, res) => {
     })
   });
 }));
-
-
-router.get('/:workspace/:environment/topology', asyncHandler(async (req, res) =>
-  res.json({ data: await getTopology(normalizeWorkspace(req), normalizeEnvironment(req)) })
-));
 
 router.get('/:workspace/:environment/traces',  asyncHandler(async (req, res) =>
   res.json({ data: await getTraces(normalizeWorkspace(req), normalizeEnvironment(req)) })
