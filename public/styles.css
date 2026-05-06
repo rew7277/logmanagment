@@ -1450,3 +1450,7 @@ html:not(.dark) .ai-insight span{color:#475569!important}
 /* Operational pulse click affordance */
 #overviewPulse [data-metric-action]{cursor:pointer}
 #overviewPulse [data-metric-action]:focus-visible,.metric-card:focus-visible,.save-view-action:focus-visible{outline:3px solid rgba(37,99,235,.35);outline-offset:3px}
+
+/* V40 settings/signout polish */
+.signout-item{width:100%;border:0;text-align:left;background:transparent;color:inherit;cursor:pointer;font:inherit}.signout-item:hover{background:rgba(239,68,68,.12)!important;color:#fecaca!important}.top-settings-link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}.sidebar .nav{gap:3px}.sidebar .product-rule{margin-top:12px}
+body.light .signout-item:hover{color:#b91c1c!important;background:#fee2e2!important}

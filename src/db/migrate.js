@@ -250,6 +250,11 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_registry_unique ON api_registry(environment_id, service_name, COALESCE(method,''), COALESCE(path,''), source)`,
   `CREATE INDEX IF NOT EXISTS idx_api_registry_env ON api_registry(environment_id, service_name, deleted_at)`,
   `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS public_id TEXT UNIQUE DEFAULT ('org_' || encode(gen_random_bytes(10),'hex'))`,
+  `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'Asia/Kolkata'`,
+  `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'INR'`,
+  `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS primary_color TEXT DEFAULT '#4f46e5'`,
+  `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS default_invite_role TEXT DEFAULT 'VIEWER'`,
+  `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS logo_url TEXT`,
   `CREATE TABLE IF NOT EXISTS roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

@@ -97,14 +97,14 @@ export async function audit({ req, orgId=null, actorId=null, actor='system', act
 }
 
 async function userPayload(userId) {
-  const result = await query(`SELECT u.id,u.public_id,u.name,u.email,u.status,u.org_id,o.slug AS org_slug,o.name AS org_name,r.name AS role,
+  const result = await query(`SELECT u.id,u.public_id,u.name,u.email,u.status,u.org_id,o.slug AS org_slug,o.name AS org_name,o.timezone AS org_timezone,o.currency AS org_currency,o.primary_color AS org_primary_color,o.default_invite_role AS org_default_invite_role,o.logo_url AS org_logo_url,r.name AS role,
       COALESCE(json_agg(DISTINCT p.key) FILTER (WHERE p.key IS NOT NULL),'[]') AS permissions
     FROM users_v2 u
     JOIN organizations o ON o.id=u.org_id
     JOIN roles r ON r.id=u.role_id
     LEFT JOIN role_permissions rp ON rp.role_id=r.id
     LEFT JOIN permissions p ON p.id=rp.permission_id
-    WHERE u.id=$1 GROUP BY u.id,o.slug,o.name,r.name`, [userId]);
+    WHERE u.id=$1 GROUP BY u.id,o.slug,o.name,o.timezone,o.currency,o.primary_color,o.default_invite_role,o.logo_url,r.name`, [userId]);
   return result.rows[0] || null;
 }
 
@@ -198,6 +198,17 @@ export async function adminLists(admin) {
     query(`SELECT created_at,actor,action,target,ip_address,status,details FROM audit_logs_v2 WHERE org_id=$1 ORDER BY created_at DESC LIMIT 200`, [admin.org_id])
   ]);
   return { users:users.rows, roles:roles.rows, invitations:invites.rows, auditLogs:auditLogs.rows, permissions:PERMISSIONS };
+}
+
+export async function updateOrganizationSettings({ req, admin, settings }) {
+  const name = String(settings.name || '').trim() || null;
+  const timezone = String(settings.timezone || 'Asia/Kolkata').trim();
+  const currency = String(settings.currency || 'INR').trim().toUpperCase();
+  const primaryColor = /^#[0-9a-fA-F]{6}$/.test(settings.primaryColor || '') ? settings.primaryColor : '#4f46e5';
+  const defaultInviteRole = String(settings.defaultInviteRole || 'VIEWER').trim().toUpperCase();
+  await query(`UPDATE organizations SET name=COALESCE($2,name), timezone=$3, currency=$4, primary_color=$5, default_invite_role=$6 WHERE id=$1`, [admin.org_id, name, timezone, currency, primaryColor, defaultInviteRole]);
+  await audit({ req, orgId:admin.org_id, actorId:admin.id, actor:admin.email, action:'organization.settings_updated', target:admin.org_id, details:{ name, timezone, currency, primaryColor, defaultInviteRole } });
+  return { name: name || admin.org_name, timezone, currency, primaryColor, defaultInviteRole };
 }
 
 export async function requirePermission(req, permission) {

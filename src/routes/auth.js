@@ -2,7 +2,7 @@ import express from 'express';
 import {
   adminLists, audit, clearSessionCookie, createInvitation, createOrganizationAdmin, currentUser,
   login, requestPasswordReset, requirePermission, resetPassword, setSessionCookie, signToken,
-  signupWithInvite
+  signupWithInvite, updateOrganizationSettings
 } from '../services/authRepository.js';
 
 const router = express.Router();
@@ -18,7 +18,7 @@ function cleanUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
-    organization: { name: user.org_name, slug: user.org_slug },
+    organization: { name: user.org_name, slug: user.org_slug, timezone:user.org_timezone, currency:user.org_currency, primaryColor:user.org_primary_color, defaultInviteRole:user.org_default_invite_role, logoUrl:user.org_logo_url },
     permissions: user.permissions || []
   };
 }
@@ -87,6 +87,13 @@ router.get('/admin/bootstrap', asyncRoute(async (req, res) => {
   const admin = await requirePermission(req, 'users:manage');
   const data = await adminLists(admin);
   res.json({ ok:true, user: cleanUser(admin), ...data });
+}));
+
+
+router.post('/admin/settings', asyncRoute(async (req, res) => {
+  const admin = await requirePermission(req, 'settings:manage');
+  const settings = await updateOrganizationSettings({ req, admin, settings: req.body || {} });
+  res.json({ ok:true, settings });
 }));
 
 router.post('/admin/invitations', asyncRoute(async (req, res) => {
