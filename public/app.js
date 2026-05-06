@@ -79,7 +79,27 @@ function setPage(page){
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
 
-function metric(label,value,sub,tone='neutral'){return `<div class="metric-card ${tone}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3>${value}</h3><p>${esc(sub)}</p></div>`;}
+function metric(label,value,sub,tone='neutral',action='logs'){return `<button type="button" class="metric-card ${tone}" data-metric-action="${esc(action)}"><span class="tag"><span class="dot"></span>${esc(label)}</span><h3 title="${esc(String(value))}">${value}</h3><p title="${esc(sub)}">${esc(sub)}</p></button>`;}
+
+function bindOverviewMetricCards(m={}){
+  $$('.metric-card[data-metric-action]').forEach(card=>{
+    card.onclick=()=>routeMetric(card.dataset.metricAction, m);
+  });
+}
+function routeMetric(action, m={}){
+  if(action==='alerts'){ setPage('alerts'); return; }
+  if(action==='apis'){ setPage('apis'); return; }
+  setPage('logs');
+  const set = (id,val)=>{ const el=$(id); if(el) el.value=val; };
+  set('serviceFilter',''); refreshPathFilter(); set('pathFilter',''); state.traceFilter=''; state.uploadFilter='';
+  if(action==='errors' || action==='spike'){ set('severityFilter','ERROR'); set('quickTime', action==='spike'?'1h':'24h'); set('logQuery',''); }
+  else if(action==='top-error'){ set('severityFilter','ERROR'); set('quickTime','24h'); set('logQuery', String(m.top_error_signature||'').slice(0,120)); }
+  else if(action==='latency'){ set('severityFilter',''); set('quickTime','24h'); set('logQuery','latency'); }
+  else { set('severityFilter',''); set('quickTime', action==='throughput'?'1h':'all'); set('logQuery',''); }
+  searchLogs(1);
+  toast('Opened related log view','success');
+}
+
 function renderOverviewPulse(m){
   const metricsEl=$('metrics'); if(!metricsEl) return;
   let pulse=$('overviewPulse');
@@ -236,17 +256,18 @@ async function loadOverview(){
     const ring=$('scoreRing');
     if(ring){ ring.className=`score-ring ${tone}`; ring.style.setProperty('--score',score); ring.innerHTML=`<span>${score?score+'%':'--'}</span>`; }
     setHtml('metrics',[
-      metric(state.environment,score?score+'%':'--','Calculated health',tone),
-      metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'From ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good'),
-      metric('Error spike',fmt(m.error_spike_events||0),'Errors in latest hour above previous hour',Number(m.error_spike_events)>20?'bad':Number(m.error_spike_events)>0?'warn':'good'),
-      metric('P95 latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral'),
-      metric('Throughput 1h',fmt(m.throughput_1h||0),'Events received in last hour','neutral'),
-      metric('Top error',fmt(m.top_error_count||0),String(m.top_error_signature||'No errors observed').slice(0,70),Number(m.top_error_count)?'warn':'good'),
-      metric('Logs',fmt(m.logs_ingested),'Total ingested logs','neutral'),
-      metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good')
+      metric(state.environment,score?score+'%':'--','Calculated health',tone,'apis'),
+      metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'From ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good','errors'),
+      metric('Error spike',fmt(m.error_spike_events||0),'Errors in latest hour above previous hour',Number(m.error_spike_events)>20?'bad':Number(m.error_spike_events)>0?'warn':'good','spike'),
+      metric('P95 latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral','latency'),
+      metric('Throughput 1h',fmt(m.throughput_1h||0),'Events received in last hour','neutral','throughput'),
+      metric('Top error',fmt(m.top_error_count||0),String(m.top_error_signature||'No errors observed').slice(0,70),Number(m.top_error_count)?'warn':'good','top-error'),
+      metric('Logs',fmt(m.logs_ingested),'Total ingested logs','neutral','logs'),
+      metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good','alerts')
     ].join(''));
     setText('summaryEnv',`${state.environment} only`);
     setHtml('summaryGrid',[['Services',m.services],['Endpoints',m.endpoints],['Success rate',`${Number(m.success_rate||Math.max(0,100-Number(m.error_rate||0))).toFixed(2)}%`],['P99 latency',fmtMs(m.p99_latency_ms||0)],['Error budget burn',`${Number(m.error_budget_burn||0).toFixed(2)}x`],['APDEX',Number(m.apdex||0).toFixed(2)],['Throughput/min',fmt(m.throughput_per_min||0)],['Recent errors 1h',fmt(m.recent_errors_1h||0)],['Previous errors 1h',fmt(m.previous_errors_1h||0)]].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
+    bindOverviewMetricCards(m);
     renderOverviewPulse(m);
     setHtml('infraGrid',[['Upload engine','10 parallel files'],['Recommended path','S3 pre-signed / chunked'],['Search','Filters + FTS'],['Max file','Configurable 500MB+']].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${esc(v)}</b></div>`).join(''));
   }catch(e){toast(e.message,'error');}
@@ -702,7 +723,7 @@ async function saveAiProvider(){
 }
 
 async function loadEnvironmentList(){
-  try{ const envs = await api(`/api/${state.workspace}/environments`); state.environments = (envs||[]).map(e=>e.name||e).filter(Boolean); }
+  try{ const envs = await api(`/api/${state.workspace}/environments`); state.environments = [...new Set([...(envs||[]).map(e=>e.name||e).filter(Boolean),'PROD','UAT','DEV','DR'])]; }
   catch{ state.environments=[...new Set(['PROD','UAT','DEV','DR',...getExtraEnvs()])]; }
 }
 async function createCustomEnvironment(){
@@ -885,13 +906,18 @@ async function uploadBody(body,name='pasted logs',opts={}){
 
 function renderEnvButtons(){
   const host=$('envButtons'); if(!host) return;
-  const source = state.environments && state.environments.length ? state.environments : ['PROD','UAT','DEV','DR'];
+  const source = [...(state.environments||[]), 'PROD','UAT','DEV','DR'];
   const envs=[...new Set(source.map(e=>String(e||'').toUpperCase()).filter(Boolean))];
   host.innerHTML=envs.map(env=>`<button type="button" class="env-btn ${env===state.environment?'active':''}" data-env="${esc(env)}">${esc(env)}</button>`).join('');
   if($('environmentList')) $('environmentList').innerHTML=envs.map(env=>`<div class="policy-item editable env-policy-card" data-env-row="${esc(env)}"><div><b>${esc(env)}</b><p>${env===state.environment?'Currently selected environment':'Available environment scope'}</p></div><div class="row-actions env-actions"><button class="mini-link edit-env" data-env="${esc(env)}">Rename</button>${env==='PROD'?'':`<button class="mini-link danger delete-env" data-env="${esc(env)}">Delete</button>`}</div></div>`).join('');
   $$('.edit-env').forEach(b=>b.onclick=()=>renameEnvironment(b.dataset.env));
   $$('.delete-env').forEach(b=>b.onclick=()=>removeEnvironment(b.dataset.env));
-  $$('.env-btn').forEach(b=>b.onclick=()=>{state.environment=b.dataset.env; localStorage.setItem('observex-env',state.environment); refreshAll();});
+  $$('.env-btn').forEach(b=>b.onclick=async()=>{
+    const next=b.dataset.env;
+    state.environment=next; localStorage.setItem('observex-env',state.environment); renderEnvButtons();
+    try{ await api(`/api/${state.workspace}/environments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:next})}); }catch{}
+    await refreshAll();
+  });
 }
 
 const apiDocTemplates = {

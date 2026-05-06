@@ -1476,10 +1476,13 @@ export async function updateEnvironmentConfig(workspaceSlug, environmentName, pa
 
 export async function listEnvironments(workspaceSlug='fsbl-prod-ops') {
   if (!hasDatabase) return fallback.environments;
-  await ensureWorkspaceEnvironment(workspaceSlug, 'PROD');
+  for (const coreEnv of ['PROD','UAT','DEV','DR']) {
+    await ensureWorkspaceEnvironment(workspaceSlug, coreEnv);
+  }
   const result = await query(`SELECT e.id, e.name, e.display_name, e.status, e.health_score, e.created_at
     FROM environments e JOIN workspaces w ON w.id=e.workspace_id
-    WHERE w.slug=$1 ORDER BY e.name='PROD' DESC, e.name='UAT' DESC, e.name ASC`, [workspaceSlug]);
+    WHERE w.slug=$1 ORDER BY
+      CASE e.name WHEN 'PROD' THEN 1 WHEN 'UAT' THEN 2 WHEN 'DEV' THEN 3 WHEN 'DR' THEN 4 ELSE 5 END, e.name ASC`, [workspaceSlug]);
   return result.rows;
 }
 
