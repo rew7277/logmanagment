@@ -1083,3 +1083,267 @@ html:not(.dark) body .severity-pill.P3 { color:#0369a1 !important; background:rg
 .ai-provider-card .clean-check{display:flex !important;align-items:center !important;gap:10px !important;margin:14px 0 !important;}
 .ai-provider-card .clean-check input{width:16px !important;height:16px !important;min-width:16px !important;max-width:16px !important;padding:0 !important;margin:0 !important;}
 @media(max-width:1120px){.ai-provider-card .ai-rca-grid,.ai-provider-card .form-grid.two{grid-template-columns:1fr !important;}}
+
+
+/* ═══════════════════════════════════════════════════════
+   THEME FIX v36 — Comprehensive light/dark theme consistency
+   Fixes modules that use hardcoded dark colors instead of CSS vars
+   ═══════════════════════════════════════════════════════ */
+
+/* ── 1. pre/code blocks — readable in light mode ── */
+html:not(.dark) pre,
+html:not(.dark) .response-panel pre,
+html:not(.dark) .modal-card pre {
+  background: #f1f5ff !important;
+  color: #1e3a6e !important;
+  border: 1px solid #dce6f5 !important;
+}
+html:not(.dark) code {
+  color: #1d4ed8 !important;
+  background: rgba(37,99,235,.07) !important;
+}
+
+/* ── 2. Alert / Ops / RCA panels with hard-coded dark backgrounds ── */
+html:not(.dark) .alert-kpi-strip > div {
+  background: rgba(255,255,255,.90) !important;
+  border-color: #dce6f5 !important;
+  color: #0d1b3e !important;
+}
+html:not(.dark) .alert-kpi-strip small { color: #6b7fa8 !important; }
+html:not(.dark) .alert-kpi-strip b { color: #0d1b3e !important; }
+
+html:not(.dark) .incident-card {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .incident-card p { color: #0d1b3e !important; }
+html:not(.dark) .incident-card small { color: #6b7fa8 !important; }
+
+/* ── 3. Rule items / policy items ── */
+html:not(.dark) .rule-item,
+html:not(.dark) .policy-item {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+  color: #0d1b3e !important;
+}
+html:not(.dark) .rule-item code { color: #1d4ed8 !important; background: rgba(37,99,235,.07) !important; }
+html:not(.dark) .rule-item small,
+html:not(.dark) .policy-item p { color: #6b7fa8 !important; }
+
+/* ── 4. Ops rows ── */
+html:not(.dark) .ops-row {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+  color: #0d1b3e !important;
+}
+html:not(.dark) .ops-row.warn { background: rgba(245,158,11,.06) !important; border-color: rgba(245,158,11,.30) !important; }
+html:not(.dark) .ops-row p { color: #6b7fa8 !important; }
+
+/* ── 5. API docs panel ── */
+html:not(.dark) .api-docs-layout,
+html:not(.dark) .endpoint-catalog {
+  background: rgba(248,251,255,.96) !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .endpoint-doc {
+  background: transparent !important;
+  border-color: #dce6f5 !important;
+  color: #6b7fa8 !important;
+}
+html:not(.dark) .endpoint-doc.active,
+html:not(.dark) .endpoint-doc:hover {
+  background: rgba(79,110,242,.08) !important;
+  color: #335cff !important;
+  border-color: rgba(79,110,242,.30) !important;
+}
+html:not(.dark) .request-builder,
+html:not(.dark) .response-panel {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+  color: #0d1b3e !important;
+}
+html:not(.dark) .api-doc-details {
+  background: rgba(79,110,242,.05) !important;
+  border-color: rgba(79,110,242,.20) !important;
+}
+html:not(.dark) .api-doc-details h4 { color: #0d1b3e !important; }
+html:not(.dark) .api-doc-details p { color: #6b7fa8 !important; }
+html:not(.dark) .request-builder label { color: #6b7fa8 !important; }
+html:not(.dark) #apiDocUrl { color: #0d1b3e !important; background: #fff !important; border-color: #dce6f5 !important; }
+
+/* ── 6. Mask rule cards ── */
+html:not(.dark) .mask-rule-card {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .mask-rule-main p { color: #6b7fa8 !important; }
+html:not(.dark) .mask-rule-main code { color: #1d4ed8 !important; background: rgba(37,99,235,.07) !important; }
+html:not(.dark) .mask-rule-title b { color: #0d1b3e !important; }
+html:not(.dark) .mask-rule-main small { color: #6b7fa8 !important; }
+
+/* ── 7. Key cards / audit rows ── */
+html:not(.dark) .key-card,
+html:not(.dark) .audit-row {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .key-card b,
+html:not(.dark) .audit-row b { color: #0d1b3e !important; }
+html:not(.dark) .key-card small,
+html:not(.dark) .audit-row small { color: #6b7fa8 !important; }
+
+/* ── 8. Secret output / mask test panel ── */
+html:not(.dark) .secret-output,
+html:not(.dark) .mask-test-panel pre {
+  background: #f0f4ff !important;
+  color: #1d4ed8 !important;
+  border-color: #dce6f5 !important;
+}
+
+/* ── 9. Helper notes / prompt chips ── */
+html:not(.dark) .helper-note {
+  background: rgba(79,110,242,.05) !important;
+  border-color: rgba(79,110,242,.18) !important;
+  color: #6b7fa8 !important;
+}
+html:not(.dark) .prompt-chip {
+  background: rgba(37,99,235,.06) !important;
+  border-color: rgba(37,99,235,.22) !important;
+  color: #1d4ed8 !important;
+}
+
+/* ── 10. AI RCA current card ── */
+html:not(.dark) .ai-current-card {
+  background: linear-gradient(135deg, rgba(79,110,242,.07), rgba(124,58,237,.04)) !important;
+  border-color: rgba(79,110,242,.22) !important;
+}
+html:not(.dark) .ai-current-card h4 { color: #0d1b3e !important; }
+html:not(.dark) .ai-current-card p { color: #6b7fa8 !important; }
+html:not(.dark) .ai-current-card small { color: #9aabbf !important; }
+
+/* ── 11. Form inputs inside dark-coded panels ── */
+html:not(.dark) .rule-form input,
+html:not(.dark) .rule-form select,
+html:not(.dark) .ai-config-card input,
+html:not(.dark) .ai-config-card select,
+html:not(.dark) .masking-form input,
+html:not(.dark) .masking-form select,
+html:not(.dark) .manual-api-form input,
+html:not(.dark) .manual-api-form select,
+html:not(.dark) .form-grid input,
+html:not(.dark) .form-grid select,
+html:not(.dark) .request-url-row input,
+html:not(.dark) .request-url-row select,
+html:not(.dark) .compact-config input,
+html:not(.dark) .compact-config select {
+  background: #ffffff !important;
+  color: #0d1b3e !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .form-grid label { color: #6b7fa8 !important; }
+
+/* ── 12. Clean check inputs in light mode ── */
+html:not(.dark) .clean-check {
+  background: rgba(79,110,242,.05) !important;
+  border-color: #dce6f5 !important;
+  color: #3a4a72 !important;
+}
+
+/* ── 13. API provider layout ── */
+html:not(.dark) .ai-config-card {
+  background: rgba(248,251,255,.96) !important;
+  border-color: #dce6f5 !important;
+}
+
+/* ── 14. Upload impact / history cards light fix ── */
+html:not(.dark) .upload-history-table { background: rgba(248,251,255,.80) !important; }
+html:not(.dark) .history-row { background: transparent !important; border-bottom-color: #dce6f5 !important; color: #0d1b3e !important; }
+html:not(.dark) .history-header { background: rgba(79,110,242,.04) !important; color: #6b7fa8 !important; }
+html:not(.dark) .history-stat { background: rgba(255,255,255,.90) !important; border-color: #dce6f5 !important; }
+html:not(.dark) .history-stat small { color: #6b7fa8 !important; }
+html:not(.dark) .history-stat b { color: #0d1b3e !important; }
+
+/* ── 15. kv cards ── */
+html:not(.dark) .kv { background: rgba(255,255,255,.75) !important; border-color: #dce6f5 !important; }
+html:not(.dark) .kv small { color: #6b7fa8 !important; }
+html:not(.dark) .kv b { color: #0d1b3e !important; }
+
+/* ── 16. Env policy cards ── */
+html:not(.dark) .env-policy-card {
+  background: #f8fbff !important;
+  border-color: #dce6f5 !important;
+  color: #0d1b3e !important;
+}
+html:not(.dark) .env-policy-card b { color: #0d1b3e !important; }
+
+/* ── 17. ingest-error light ── */
+html:not(.dark) .ingest-error {
+  background: rgba(220,38,38,.05) !important;
+  border-color: rgba(220,38,38,.22) !important;
+  color: #991b1b !important;
+}
+
+/* ── 18. Insight cards ── */
+html:not(.dark) .insight {
+  background: rgba(79,110,242,.05) !important;
+  border-color: rgba(79,110,242,.16) !important;
+  color: #3a4a72 !important;
+}
+html:not(.dark) .insight.warn {
+  background: rgba(245,158,11,.06) !important;
+  border-color: rgba(245,158,11,.25) !important;
+  color: #92400e !important;
+}
+
+/* ── 19. API registry panel ── */
+html:not(.dark) .api-registry-panel {
+  background: rgba(255,255,255,.90) !important;
+  border-color: #dce6f5 !important;
+}
+html:not(.dark) .api-manage-row { color: #6b7fa8 !important; border-color: #dce6f5 !important; }
+
+/* ── 20. Modal backdrop & card ── */
+html:not(.dark) .modal-backdrop { background: rgba(10,20,60,.38) !important; }
+html:not(.dark) .modal-card { background: #fff !important; border-color: #dce6f5 !important; }
+html:not(.dark) .modal-grid > div { background: rgba(79,110,242,.04) !important; border-color: #dce6f5 !important; color: #0d1b3e !important; }
+html:not(.dark) .modal-grid small { color: #6b7fa8 !important; }
+
+/* ── 21. Arch flow ── */
+html:not(.dark) .arch-flow div { background: rgba(255,255,255,.90) !important; border-color: #dce6f5 !important; color: #0d1b3e !important; }
+
+/* ── 22. env-command-card ── */
+html:not(.dark) .env-command-card { background: #fff !important; border-color: #dce6f5 !important; }
+html:not(.dark) .env-command-card h3 { color: #0d1b3e !important; }
+html:not(.dark) .env-command-card p { color: #6b7fa8 !important; }
+
+/* ── 23. nav-pill for light (app shell sidebar) ── */
+html:not(.dark) .nav-pill-light { color: #3a4a72 !important; }
+
+/* ── 24. drop-zone light ── */
+html:not(.dark) .drop-zone {
+  background: linear-gradient(135deg, rgba(79,110,242,.07), rgba(6,182,212,.05)) !important;
+  border-color: rgba(79,110,242,.30) !important;
+  color: #3a4a72 !important;
+}
+html:not(.dark) .drop-zone strong,
+html:not(.dark) .drop-zone small { color: #6b7fa8 !important; }
+
+/* ── 25. hero card light tweaks ── */
+html:not(.dark) .hero-card {
+  background: linear-gradient(135deg, rgba(124,58,237,.08), rgba(6,182,212,.06), rgba(255,255,255,.80)) !important;
+}
+html:not(.dark) .metric-card { background: rgba(255,255,255,.92) !important; }
+
+/* ── 26. score ring in light ── */
+html:not(.dark) .score-ring { background: conic-gradient(var(--good) calc(var(--score)*1%), rgba(148,163,184,.16) 0) !important; }
+html:not(.dark) .score-ring::after { background: #fff !important; }
+
+/* ── 27. Upload settings summary ── */
+html:not(.dark) .upload-settings { background: rgba(255,255,255,.90) !important; border-color: #dce6f5 !important; }
+
+/* ── 28. Ingest progress light ── */
+html:not(.dark) .ingest-progress { background: linear-gradient(135deg, rgba(255,255,255,.96), rgba(240,246,255,.92)) !important; box-shadow: 0 18px 48px rgba(37,99,235,.08) !important; }
+
+/* ── Final: ensure body in both modes uses CSS var background ── */
+html.dark body { background: var(--bg); }
+html:not(.dark) body { background: var(--bg); }

@@ -3,561 +3,471 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ObserveX — Sign In</title>
+  <title>ObserveX — Access</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
   <style>
     :root {
-      --bg:#030b1a;
-      --card:rgba(8,20,45,0.82);
-      --text:#e4ecff;
-      --muted:#6b83a8;
-      --line:rgba(96,165,250,0.14);
-      --primary:#3b82f6;
-      --cyan:#06b6d4;
-      --purple:#8b5cf6;
-      --good:#10b981;
-      --bad:#f43f5e;
-      --warn:#f59e0b;
+      --bg:#f0f4ff;--surface:rgba(255,255,255,0.90);--surface2:rgba(255,255,255,0.98);
+      --border:rgba(100,130,230,0.18);--border-focus:rgba(79,110,242,0.55);
+      --text:#0d1b3e;--text2:#3a4a72;--muted:#6b7fa8;
+      --primary:#4f6ef2;--primary2:#7c3aed;--accent:#06b6d4;
+      --good:#10b981;--bad:#ef4444;--warn:#f59e0b;
+      --shadow:0 28px 80px rgba(20,40,120,0.16);--shadow-sm:0 8px 28px rgba(20,40,120,0.10);
+      --input-bg:rgba(255,255,255,0.75);--tab-active-bg:rgba(79,110,242,0.10);
+      --tab-active-border:rgba(79,110,242,0.38);--role-bg:rgba(255,255,255,0.72);
+      --role-sel-bg:rgba(79,110,242,0.09);--role-sel-border:rgba(79,110,242,0.42);
+      --note-bg:rgba(79,110,242,0.07);--note-border:rgba(79,110,242,0.20);--note-text:#3a4a72;
+      --status-bg:rgba(255,255,255,0.60);
     }
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{
-      background:var(--bg);
-      color:var(--text);
-      font-family:'DM Sans',system-ui,sans-serif;
-      min-height:100vh;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      overflow:auto;
-      position:relative;
+    html.dark {
+      --bg:#08111f;--surface:rgba(14,24,48,0.90);--surface2:rgba(10,19,40,0.98);
+      --border:rgba(80,120,220,0.18);--border-focus:rgba(96,165,250,0.50);
+      --text:#e8eeff;--text2:#b0bedd;--muted:#7a90be;
+      --primary:#60a5fa;--primary2:#a78bfa;--accent:#22d3ee;
+      --good:#34d399;--bad:#f87171;--warn:#fbbf24;
+      --shadow:0 28px 80px rgba(0,0,0,0.50);--shadow-sm:0 8px 28px rgba(0,0,0,0.30);
+      --input-bg:rgba(255,255,255,0.05);--tab-active-bg:rgba(96,165,250,0.12);
+      --tab-active-border:rgba(96,165,250,0.30);--role-bg:rgba(255,255,255,0.03);
+      --role-sel-bg:rgba(96,165,250,0.10);--role-sel-border:rgba(96,165,250,0.38);
+      --note-bg:rgba(96,165,250,0.07);--note-border:rgba(96,165,250,0.22);--note-text:#93c5fd;
+      --status-bg:rgba(255,255,255,0.04);
     }
-
-    /* ── Animated background ── */
-    .bg-canvas{position:fixed;inset:0;pointer-events:none;z-index:0}
-    .grid-layer{
-      position:absolute;inset:0;
-      background-image:
-        linear-gradient(rgba(59,130,246,.07) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(59,130,246,.07) 1px, transparent 1px);
-      background-size:60px 60px;
-      mask-image:radial-gradient(ellipse 80% 60% at 50% 50%, black, transparent);
-    }
-    .glow-1{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(59,130,246,.22) 0%,transparent 70%);top:-10%;left:-10%;animation:drift1 18s ease-in-out infinite}
-    .glow-2{position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.18) 0%,transparent 70%);bottom:-15%;right:-8%;animation:drift2 22s ease-in-out infinite}
-    .glow-3{position:absolute;width:380px;height:380px;border-radius:50%;background:radial-gradient(circle,rgba(6,182,212,.14) 0%,transparent 70%);top:40%;right:20%;animation:drift3 16s ease-in-out infinite}
-    @keyframes drift1{0%,100%{transform:translate(0,0)}50%{transform:translate(60px,40px)}}
-    @keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-50px,-40px)}}
-    @keyframes drift3{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-60px)}}
-    .particles{position:absolute;inset:0;overflow:hidden}
-    .p{position:absolute;width:2px;height:2px;border-radius:50%;background:#60a5fa;opacity:0;animation:sparkle var(--d,4s) var(--delay,0s) ease-in-out infinite}
-    @keyframes sparkle{0%,100%{opacity:0;transform:scale(0)}30%,70%{opacity:.6;transform:scale(1)}}
-    .scanline{position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px);pointer-events:none;opacity:.4}
-
-    /* ── Layout ── */
-    .auth-wrap{
-      position:relative;z-index:2;
-      display:grid;
-      grid-template-columns:380px;
-      min-height:100vh;
-      align-items:center;
-      justify-content:center;
-      padding:32px 16px;
-    }
-    @media(min-width:860px){
-      .auth-wrap{grid-template-columns:minmax(420px,520px) minmax(360px,440px);gap:36px;max-width:1060px;margin:auto}
-      .auth-hero{display:flex}
-    }
-
-    /* ── Hero panel ── */
-    .auth-hero{
-      display:none;flex-direction:column;justify-content:center;gap:28px;
-    }
-    .ox-brand{display:flex;align-items:center;gap:14px;margin-bottom:8px}
-    .ox-logo{
-      width:56px;height:56px;border-radius:18px;
-      background:linear-gradient(135deg,#10b981,#3b82f6 50%,#8b5cf6);
-      display:grid;place-items:center;
-      font-family:'Syne',sans-serif;font-weight:800;font-size:20px;color:#fff;
-      box-shadow:0 0 40px rgba(59,130,246,.4);
-      letter-spacing:-1px;
-    }
-    .ox-name{font-family:'Syne',sans-serif;font-weight:800;font-size:28px;letter-spacing:-1px}
-    .ox-tagline{font-size:14px;color:var(--muted);font-weight:500;margin-top:2px}
-    .hero-headline{
-      font-family:'Syne',sans-serif;font-weight:700;
-      font-size:clamp(36px,4vw,52px);line-height:1.08;letter-spacing:-2px;
-    }
-    .hero-headline .grad{
-      background:linear-gradient(135deg,#60a5fa,#06b6d4,#8b5cf6);
-      -webkit-background-clip:text;color:transparent;
-    }
-    .hero-desc{color:var(--muted);font-size:16px;line-height:1.65;max-width:380px}
-    .feature-pills{display:flex;flex-wrap:wrap;gap:8px}
-    .pill{
-      display:inline-flex;align-items:center;gap:6px;
-      padding:8px 14px;border-radius:999px;
-      border:1px solid var(--line);
-      background:rgba(59,130,246,.07);
-      font-size:12px;font-weight:600;color:var(--text);
-    }
-    .pill-dot{width:6px;height:6px;border-radius:50%}
-
-    /* ── Auth card ── */
-    .auth-card{
-      background:var(--card);
-      border:1px solid var(--line);
-      border-radius:28px;
-      padding:28px 28px;
-      max-height:calc(100vh - 36px);
-      overflow:auto;
-      backdrop-filter:blur(24px);
-      box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.04);
-      position:relative;overflow:hidden;
-    }
-    .auth-card::before{
-      content:"";position:absolute;inset:0;
-      background:radial-gradient(circle at 50% 0%,rgba(59,130,246,.12),transparent 60%);
-      pointer-events:none;
-    }
-    .auth-card > *{position:relative;z-index:1}
-    .card-brand{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-    .card-logo{
-      width:38px;height:38px;border-radius:12px;
-      background:linear-gradient(135deg,#10b981,#3b82f6 50%,#8b5cf6);
-      display:grid;place-items:center;font-family:'Syne',sans-serif;
-      font-weight:800;font-size:13px;color:#fff;
-    }
-    .card-logo-text{font-family:'Syne',sans-serif;font-weight:700;font-size:18px}
-    .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:rgba(255,255,255,.04);border-radius:14px;padding:4px;margin-bottom:28px}
-    .tab-btn{
-      padding:10px;border-radius:10px;border:0;background:transparent;
-      color:var(--muted);font-family:'DM Sans',sans-serif;font-weight:600;font-size:14px;
-      cursor:pointer;transition:.18s;
-    }
-    .tab-btn.active{background:rgba(59,130,246,.18);color:#93c5fd;border:1px solid rgba(59,130,246,.25)}
-
-    /* forms */
-    .form-group{margin-bottom:12px}
-    .form-label{
-      display:block;font-size:11px;font-weight:700;text-transform:uppercase;
-      letter-spacing:1px;color:var(--muted);margin-bottom:7px;
-    }
-    .form-input{
-      width:100%;padding:13px 16px;
-      background:rgba(255,255,255,.05);
-      border:1px solid rgba(255,255,255,.09);
-      border-radius:14px;
-      color:var(--text);
-      font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;
-      outline:none;transition:border-color .18s,box-shadow .18s;
-    }
-    .form-input::placeholder{color:rgba(107,131,168,.6)}
-    .form-input:focus{
-      border-color:rgba(59,130,246,.5);
-      box-shadow:0 0 0 3px rgba(59,130,246,.12),inset 0 0 0 1px rgba(59,130,246,.2);
-    }
-    .form-input.has-icon{padding-left:44px}
-    .input-wrap{position:relative}
-    .input-icon{
-      position:absolute;left:14px;top:50%;transform:translateY(-50%);
-      width:18px;height:18px;color:var(--muted);
-      display:flex;align-items:center;justify-content:center;
-    }
-    .input-icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-    .input-suffix{
-      position:absolute;right:12px;top:50%;transform:translateY(-50%);
-      font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500;
-      padding:4px 8px;border-radius:6px;background:rgba(16,185,129,.12);
-      color:#34d399;border:1px solid rgba(16,185,129,.2);
-    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;overflow-x:hidden;transition:background .3s,color .3s}
+    .theme-btn{position:fixed;top:20px;right:20px;z-index:200;width:44px;height:44px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-sm);transition:all .2s;font-size:18px}
+    .theme-btn:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+    .auth-layout{display:grid;grid-template-columns:1fr 1fr;min-height:100vh;width:100%}
+    /* Hero */
+    .hero-panel{background:linear-gradient(160deg,#0f1a3e 0%,#162048 45%,#0e1c4a 100%);position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:48px}
+    .hero-panel::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 20% 30%,rgba(79,110,242,.28),transparent),radial-gradient(ellipse 50% 50% at 80% 70%,rgba(124,58,237,.22),transparent),radial-gradient(ellipse 60% 40% at 50% 90%,rgba(6,182,212,.16),transparent);pointer-events:none}
+    .hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(79,110,242,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(79,110,242,.07) 1px,transparent 1px);background-size:48px 48px;mask-image:radial-gradient(ellipse 90% 80% at 40% 50%,black 30%,transparent 80%)}
+    .orb{position:absolute;border-radius:50%;pointer-events:none}
+    .orb-1{width:340px;height:340px;background:radial-gradient(circle,rgba(79,110,242,.28) 0%,transparent 70%);top:-80px;left:-80px;animation:od1 20s ease-in-out infinite}
+    .orb-2{width:260px;height:260px;background:radial-gradient(circle,rgba(124,58,237,.24) 0%,transparent 70%);bottom:5%;right:-50px;animation:od2 25s ease-in-out infinite}
+    .orb-3{width:200px;height:200px;background:radial-gradient(circle,rgba(6,182,212,.20) 0%,transparent 70%);top:45%;left:55%;animation:od3 18s ease-in-out infinite}
+    @keyframes od1{0%,100%{transform:translate(0,0)}50%{transform:translate(40px,30px)}}
+    @keyframes od2{0%,100%{transform:translate(0,0)}50%{transform:translate(-30px,-40px)}}
+    @keyframes od3{0%,100%{transform:translate(0,0)}50%{transform:translate(20px,-30px)}}
+    .pt-field{position:absolute;inset:0;overflow:hidden}
+    .pt{position:absolute;width:2px;height:2px;border-radius:50%;background:rgba(96,165,250,.8);opacity:0;animation:pts var(--d,5s) var(--dl,0s) ease-in-out infinite}
+    @keyframes pts{0%,100%{opacity:0;transform:scale(0)}40%,60%{opacity:.7;transform:scale(1)}}
+    .hero-content{position:relative;z-index:2}
+    .hero-brand{display:flex;align-items:center;gap:16px;margin-bottom:52px}
+    .hero-logo{width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,#10b981,#4f6ef2 50%,#7c3aed);display:grid;place-items:center;font-family:'JetBrains Mono',monospace;font-weight:600;font-size:15px;color:#fff;box-shadow:0 0 40px rgba(79,110,242,.45),0 0 0 1px rgba(255,255,255,.12);letter-spacing:-1px}
+    .hero-brand-text strong{display:block;font-size:22px;font-weight:800;letter-spacing:-.5px;color:#fff}
+    .hero-brand-text span{font-size:12px;font-weight:500;opacity:.6;letter-spacing:.5px;color:#fff}
+    .hero-headline{font-size:clamp(38px,4vw,56px);font-weight:800;line-height:1.05;letter-spacing:-2px;color:#fff;margin-bottom:18px}
+    .hero-headline em{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;background:linear-gradient(90deg,#93c5fd,#22d3ee,#a78bfa);-webkit-background-clip:text;color:transparent}
+    .hero-desc{font-size:15px;line-height:1.7;color:rgba(180,200,240,.80);max-width:380px;margin-bottom:32px}
+    .feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    .fi{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid rgba(255,255,255,.07);border-radius:13px;background:rgba(255,255,255,.04)}
+    .fd{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+    .fi span{font-size:12px;font-weight:600;color:rgba(200,220,255,.85)}
+    .nav-pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:36px}
+    .npill{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid rgba(255,255,255,.10);border-radius:999px;background:rgba(255,255,255,.05);font-size:12px;font-weight:600;color:rgba(200,220,255,.78)}
+    .pd{width:6px;height:6px;border-radius:50%}
+    .hero-footer{position:relative;z-index:2}
+    .hero-stats{display:flex;gap:32px}
+    .hs b{display:block;font-size:24px;font-weight:800;color:#fff}
+    .hs small{font-size:10px;color:rgba(150,180,230,.65);font-weight:500;text-transform:uppercase;letter-spacing:.8px}
+    /* Auth Card */
+    .auth-panel-wrap{display:flex;align-items:center;justify-content:center;padding:32px 24px;background:var(--bg);transition:background .3s;overflow-y:auto}
+    .auth-card{width:100%;max-width:466px;background:var(--surface);border:1px solid var(--border);border-radius:28px;padding:36px 36px 26px;box-shadow:var(--shadow);backdrop-filter:blur(24px);position:relative;transition:all .3s}
+    .auth-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(79,110,242,.5),transparent);border-radius:28px 28px 0 0}
+    .card-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+    .card-logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#10b981,#4f6ef2 50%,#7c3aed);display:grid;place-items:center;font-family:'JetBrains Mono',monospace;font-weight:600;font-size:12px;color:#fff}
+    .card-logo-text{font-size:17px;font-weight:800;letter-spacing:-.3px}
+    .card-heading{font-size:28px;font-weight:800;letter-spacing:-.8px;margin-bottom:4px}
+    .card-sub{font-size:13px;color:var(--muted);font-weight:500;margin-bottom:24px}
+    .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--input-bg);border:1px solid var(--border);border-radius:16px;padding:4px;margin-bottom:26px}
+    .tab-btn{padding:11px;border-radius:12px;border:1px solid transparent;background:transparent;color:var(--muted);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;cursor:pointer;transition:all .18s}
+    .tab-btn.active{background:var(--tab-active-bg);border-color:var(--tab-active-border);color:var(--primary)}
+    .form-gap{margin-bottom:14px}
+    .form-label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:7px}
+    .form-label .opt{text-transform:none;letter-spacing:0;font-weight:600;color:var(--accent);font-size:11px}
+    .iw{position:relative}
+    .form-input{width:100%;padding:13px 16px 13px 44px;background:var(--input-bg);border:1px solid var(--border);border-radius:14px;color:var(--text);font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:500;outline:none;transition:border-color .18s,box-shadow .18s,background .18s}
+    .form-input.ni{padding-left:16px}
+    .form-input::placeholder{color:var(--muted);opacity:.7}
+    .form-input:focus{border-color:var(--border-focus);box-shadow:0 0 0 3px rgba(79,110,242,.11);background:var(--surface2)}
+    .ii{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted);display:flex;align-items:center;justify-content:center;pointer-events:none}
+    .ii svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .eye-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center}
+    .eye-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .mono-i{font-family:'JetBrains Mono',monospace;letter-spacing:1.5px;font-size:13px}
     .row-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .invite-note{
-      margin-top:6px;padding:10px 12px;
-      border:1px solid rgba(139,92,246,.2);border-radius:10px;
-      background:rgba(139,92,246,.07);
-      font-size:12px;font-weight:500;color:rgba(196,181,253,.9);
-    }
-    .invite-note b{color:#c4b5fd}
-    .workspace-note{
-      margin-top:6px;padding:10px 12px;
-      border:1px solid rgba(6,182,212,.2);border-radius:10px;
-      background:rgba(6,182,212,.06);
-      font-size:12px;font-weight:500;color:rgba(103,232,249,.9);
-    }
-    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px}
-    .role-card{
-      padding:10px 8px;border-radius:12px;border:1px solid var(--line);
-      background:rgba(255,255,255,.03);cursor:pointer;text-align:center;
-      transition:.18s;
-    }
-    .role-card.selected{border-color:rgba(59,130,246,.4);background:rgba(59,130,246,.1)}
-    .role-card input{display:none}
-    .role-card-icon{font-size:18px;margin-bottom:4px}
-    .role-card-name{font-size:11px;font-weight:700;letter-spacing:.5px}
-    .role-card-desc{font-size:10px;color:var(--muted);margin-top:2px}
-
-    .submit-btn{
-      width:100%;padding:15px;margin-top:8px;
-      background:linear-gradient(135deg,var(--primary),var(--purple));
-      border:0;border-radius:16px;
-      color:#fff;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;
-      cursor:pointer;transition:.18s;
-      box-shadow:0 12px 36px rgba(59,130,246,.28);
-      position:relative;overflow:hidden;
-    }
-    .submit-btn:hover{transform:translateY(-1px);box-shadow:0 18px 48px rgba(59,130,246,.36)}
-    .submit-btn:active{transform:translateY(0)}
-    .submit-btn::before{
-      content:"";position:absolute;inset:0;
-      background:linear-gradient(135deg,rgba(255,255,255,.15),transparent);
-      opacity:0;transition:opacity .18s;
-    }
+    .input-suffix{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;padding:4px 8px;border-radius:7px;background:rgba(16,185,129,.11);color:var(--good);border:1px solid rgba(16,185,129,.24);pointer-events:none}
+    .form-input.with-sfx{padding-right:102px}
+    .info-note{margin-top:7px;padding:10px 13px;border:1px solid var(--note-border);border-radius:11px;background:var(--note-bg);font-size:12px;font-weight:500;color:var(--note-text);line-height:1.5}
+    .info-note strong{font-weight:700}
+    .info-note.warn-n{border-color:rgba(245,158,11,.30);background:rgba(245,158,11,.08);color:var(--warn)}
+    .admin-banner{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid rgba(124,58,237,.28);border-radius:13px;background:rgba(124,58,237,.07);margin-bottom:16px}
+    .admin-banner-text{font-size:12px;color:var(--primary2);font-weight:600;line-height:1.45}
+    .admin-banner-text strong{font-weight:800;display:block;font-size:13px}
+    .role-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .role-card{padding:11px 8px;border:1px solid var(--border);border-radius:13px;background:var(--role-bg);cursor:pointer;text-align:center;transition:all .18s;user-select:none}
+    .role-card:hover{border-color:var(--primary);background:var(--role-sel-bg)}
+    .role-card.sel{border-color:var(--role-sel-border);background:var(--role-sel-bg);box-shadow:0 0 0 1px rgba(79,110,242,.18)}
+    .ri{font-size:18px;margin-bottom:4px;display:block}
+    .rn{font-size:11px;font-weight:800;letter-spacing:.3px}
+    .rd{font-size:10px;color:var(--muted);margin-top:2px}
+    .submit-btn{width:100%;padding:15px;margin-top:16px;border:none;border-radius:16px;background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff;font-family:'Plus Jakarta Sans',sans-serif;font-size:15px;font-weight:800;cursor:pointer;transition:all .18s;box-shadow:0 12px 36px rgba(79,110,242,.28);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:8px}
+    .submit-btn::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.16),transparent);opacity:0;transition:opacity .18s}
     .submit-btn:hover::before{opacity:1}
-    .btn-loader{display:none;width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    .submit-btn.loading .btn-text{display:none}
-    .submit-btn.loading .btn-loader{display:block;margin:auto}
-
-    .divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:12px;font-weight:600}
-    .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
-
-    .error-box{
-      padding:12px 14px;margin-bottom:16px;
-      border:1px solid rgba(244,63,94,.25);border-radius:12px;
-      background:rgba(244,63,94,.08);
-      font-size:13px;font-weight:500;color:#fda4af;display:none;
-    }
-    .success-box{
-      padding:12px 14px;margin-bottom:16px;
-      border:1px solid rgba(16,185,129,.25);border-radius:12px;
-      background:rgba(16,185,129,.08);
-      font-size:13px;font-weight:500;color:#6ee7b7;display:none;
-    }
-    .terms-note{
-      text-align:center;margin-top:16px;font-size:12px;color:var(--muted);
-    }
-    .terms-note a{color:#93c5fd;text-decoration:none}
-    .status-row{
-      display:flex;align-items:center;gap:6px;
-      font-size:11px;font-weight:600;color:var(--muted);
-      margin-top:20px;padding-top:16px;border-top:1px solid var(--line);
-    }
-    .status-dot{width:7px;height:7px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;flex-shrink:0}
-    .version-tag{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(107,131,168,.6);background:rgba(255,255,255,.04);padding:3px 7px;border-radius:6px}
-
-    /* ── Demo banner ── */
-    .demo-strip{
-      position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-      background:rgba(8,20,45,.9);border:1px solid rgba(245,158,11,.25);
-      border-radius:12px;padding:10px 16px;backdrop-filter:blur(16px);
-      display:flex;align-items:center;gap:10px;
-      font-size:12px;font-weight:600;color:rgba(253,230,138,.9);
-      z-index:100;white-space:nowrap;
-    }
-    .demo-strip svg{width:14px;height:14px;flex-shrink:0;stroke:#f59e0b;fill:none;stroke-width:2;stroke-linecap:round}
-
-    /* ── Transitions ── */
-    .auth-panel{transition:opacity .2s,transform .2s}
-    .auth-panel.hidden{opacity:0;pointer-events:none;position:absolute;transform:translateY(8px)}
-    .auth-panel.visible{opacity:1;transform:none}
+    .submit-btn:hover{transform:translateY(-1px);box-shadow:0 18px 48px rgba(79,110,242,.36)}
+    .submit-btn:active{transform:translateY(0)}
+    .submit-btn:disabled{opacity:.65;cursor:not-allowed;transform:none}
+    .spin{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    .google-btn{width:100%;padding:13px;border:1px solid var(--border);border-radius:14px;background:var(--input-bg);color:var(--text);font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;transition:all .18s;display:flex;align-items:center;justify-content:center;gap:10px}
+    .google-btn:hover{border-color:var(--primary);background:var(--surface2);transform:translateY(-1px)}
+    .or-div{display:flex;align-items:center;gap:12px;margin:16px 0;color:var(--muted);font-size:12px;font-weight:700}
+    .or-div::before,.or-div::after{content:'';flex:1;height:1px;background:var(--border)}
+    .msg-box{padding:12px 14px;border-radius:12px;font-size:13px;font-weight:600;margin-bottom:14px;display:none;align-items:flex-start;gap:9px}
+    .msg-box.err{background:rgba(239,68,68,.09);border:1px solid rgba(239,68,68,.26);color:var(--bad)}
+    .msg-box.ok{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.26);color:var(--good)}
+    .card-footer{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+    .cfl{font-size:12px;color:var(--muted)}
+    .cfl a{color:var(--primary);text-decoration:none;font-weight:700}
+    .cfl a:hover{text-decoration:underline}
+    .status-chip{display:flex;align-items:center;gap:6px;padding:5px 10px;background:var(--status-bg);border:1px solid var(--border);border-radius:999px;font-size:11px;font-weight:700;color:var(--muted)}
+    .sd{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 8px rgba(16,185,129,.6);flex-shrink:0}
+    .auth-view{transition:opacity .22s,transform .22s}
+    .auth-view.hidden{opacity:0;pointer-events:none;position:absolute;width:calc(100% - 72px);transform:translateY(8px)}
+    .pw-bar{margin-top:7px}
+    .pw-track{height:4px;border-radius:99px;background:var(--border);overflow:hidden}
+    .pw-fill{height:100%;border-radius:99px;transition:width .3s,background .3s;width:0}
+    .pw-label{font-size:11px;color:var(--muted);margin-top:4px;font-weight:600}
+    .demo-banner{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid rgba(245,158,11,.35);border-radius:14px;padding:10px 18px;backdrop-filter:blur(16px);font-size:12px;font-weight:700;color:var(--warn);z-index:100;white-space:nowrap;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow-sm)}
+    .demo-banner a{color:var(--warn);text-decoration:none;font-weight:800}
+    @media(max-width:860px){.auth-layout{grid-template-columns:1fr}.hero-panel{display:none}.auth-panel-wrap{min-height:100vh;padding:20px 16px}.auth-card{padding:28px 22px 22px}}
+    @media(max-width:480px){.role-grid{grid-template-columns:1fr 1fr}.row-2{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-<!-- Background -->
-<div class="bg-canvas">
-  <div class="grid-layer"></div>
-  <div class="glow-1"></div>
-  <div class="glow-2"></div>
-  <div class="glow-3"></div>
-  <div class="particles" id="particles"></div>
-  <div class="scanline"></div>
-</div>
 
-<div class="auth-wrap">
-  <!-- Hero panel (visible on wide screens) -->
-  <div class="auth-hero">
-    <div>
-      <div class="ox-brand">
-        <div class="ox-logo">OX</div>
-        <div><div class="ox-name">ObserveX</div><div class="ox-tagline">Enterprise Observability Platform</div></div>
+<button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme"><span id="themeIcon">☾</span></button>
+
+<div class="auth-layout">
+  <!-- Hero -->
+  <div class="hero-panel">
+    <div class="hero-grid"></div>
+    <div class="orb orb-1"></div><div class="orb orb-2"></div><div class="orb orb-3"></div>
+    <div class="pt-field" id="ptf"></div>
+    <div class="hero-content">
+      <div class="hero-brand">
+        <div class="hero-logo">OX</div>
+        <div class="hero-brand-text"><strong>ObserveX</strong><span>Enterprise Observability</span></div>
       </div>
-      <div class="hero-headline">
-        Full-stack<br/>observability<br/><span class="grad">in one place</span>
+      <div class="hero-headline">Built for teams<br/>that ship <em>fast.</em></div>
+      <p class="hero-desc">Full-stack observability in one unified platform. Monitor services, trace requests, detect anomalies and run AI-powered root cause analysis — in real time.</p>
+      <div class="feature-grid">
+        <div class="fi"><span class="fd" style="background:#60a5fa"></span><span>AI RCA Engine</span></div>
+        <div class="fi"><span class="fd" style="background:#a78bfa"></span><span>Smart Alerts</span></div>
+        <div class="fi"><span class="fd" style="background:#22d3ee"></span><span>Topology View</span></div>
+        <div class="fi"><span class="fd" style="background:#fbbf24"></span><span>RBAC Controls</span></div>
+        <div class="fi"><span class="fd" style="background:#f87171"></span><span>Audit Trails</span></div>
+        <div class="fi"><span class="fd" style="background:#34d399"></span><span>Log Analytics</span></div>
+      </div>
+      <div class="nav-pills">
+        <span class="npill"><span class="pd" style="background:#60a5fa"></span>Projects</span>
+        <span class="npill"><span class="pd" style="background:#a78bfa"></span>AI Docs</span>
+        <span class="npill"><span class="pd" style="background:#22d3ee"></span>Timeline</span>
+        <span class="npill"><span class="pd" style="background:#fbbf24"></span>Kanban</span>
+        <span class="npill"><span class="pd" style="background:#34d399"></span>Analytics</span>
       </div>
     </div>
-    <p class="hero-desc">Monitor services, trace requests, detect anomalies, and run AI-powered root cause analysis across all your environments — in real time.</p>
-    <div class="feature-pills">
-      <span class="pill"><span class="pill-dot" style="background:#3b82f6"></span>AI RCA Engine</span>
-      <span class="pill"><span class="pill-dot" style="background:#8b5cf6"></span>Smart Alerts</span>
-      <span class="pill"><span class="pill-dot" style="background:#06b6d4"></span>Topology View</span>
-      <span class="pill"><span class="pill-dot" style="background:#f59e0b"></span>RBAC Controls</span>
-      <span class="pill"><span class="pill-dot" style="background:#f43f5e"></span>Audit Trails</span>
-    </div>
-  </div>
-
-  <!-- Auth card -->
-  <div class="auth-card">
-    <div class="card-brand">
-      <div class="card-logo">OX</div>
-      <div class="card-logo-text">ObserveX</div>
-    </div>
-
-    <!-- Tab switcher -->
-    <div class="tabs">
-      <button class="tab-btn active" id="tabLogin" onclick="switchTab('login')">Sign In</button>
-      <button class="tab-btn" id="tabSignup" onclick="switchTab('signup')">Create Account</button>
-    </div>
-
-    <div id="errorBox" class="error-box"></div>
-    <div id="successBox" class="success-box"></div>
-
-    <!-- ── LOGIN PANEL ── -->
-    <div class="auth-panel visible" id="loginPanel">
-      <div class="form-group">
-        <label class="form-label">Email address</label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/><path d="m22 6-10 7L2 6"/></svg></span>
-          <input class="form-input has-icon" id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email"/>
-        </div>
+    <div class="hero-footer">
+      <div class="hero-stats">
+        <div class="hs"><b>99.9%</b><small>Uptime SLA</small></div>
+        <div class="hs"><b>&lt;2ms</b><small>Query Latency</small></div>
+        <div class="hs"><b>50TB+</b><small>Logs Processed</small></div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Password</label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
-          <input class="form-input has-icon" id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password"/>
-        </div>
-      </div>
-      <button class="submit-btn" id="loginBtn" onclick="handleLogin()">
-        <span class="btn-text">Sign In</span>
-        <div class="btn-loader"></div>
-      </button>
-      <div class="terms-note">
-        No account? <a href="#" onclick="switchTab('signup')">Create one</a> · <a href="#" onclick="demoLogin()">Use demo credentials</a>
-      </div>
-    </div>
-
-    <!-- ── SIGNUP PANEL ── -->
-    <div class="auth-panel hidden" id="signupPanel" style="position:relative">
-      <div class="row-2">
-        <div class="form-group">
-          <label class="form-label">First name</label>
-          <input class="form-input" id="signupFirst" type="text" placeholder="Prasanna" autocomplete="given-name"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Last name</label>
-          <input class="form-input" id="signupLast" type="text" placeholder="Kumar"/>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Work email</label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/><path d="m22 6-10 7L2 6"/></svg></span>
-          <input class="form-input has-icon" id="signupEmail" type="email" placeholder="you@company.com" autocomplete="email"/>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Workspace name <span style="color:#06b6d4">· Your org identifier</span></label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
-          <input class="form-input has-icon" id="signupWorkspace" type="text" placeholder="my-company-prod" autocomplete="off" oninput="slugifyWorkspace(this)"/>
-          <span class="input-suffix">.observex</span>
-        </div>
-        <div class="workspace-note">This will be your team's unique URL. Only lowercase letters, numbers, and hyphens.</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Invitation code <span style="color:#8b5cf6">· Optional</span></label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><path d="m21 2-1 7H4L3 2M12 13v8M8 17l4 4 4-4"/><path d="m21 2-2 7"/></svg></span>
-          <input class="form-input has-icon" id="signupInvite" type="text" placeholder="Optional for first admin setup" autocomplete="off" style="font-family:'JetBrains Mono',monospace;letter-spacing:1px"/>
-        </div>
-        <div class="invite-note"><b>Admin setup:</b> invite code is optional while creating the organisation admin account. Admins can generate invite codes later from Settings → Invite Codes.</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Role</label>
-        <div class="workspace-note">Organisation account creation is restricted to <b>Admin</b>. After login, the admin can create invite codes for members and viewers.</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Password</label>
-        <div class="input-wrap">
-          <span class="input-icon"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
-          <input class="form-input has-icon" id="signupPassword" type="password" placeholder="Min 8 characters" autocomplete="new-password"/>
-        </div>
-      </div>
-      <button class="submit-btn" id="signupBtn" onclick="handleSignup()">
-        <span class="btn-text">Create Account</span>
-        <div class="btn-loader"></div>
-      </button>
-      <div class="terms-note">Already have an account? <a href="#" onclick="switchTab('login')">Sign in</a></div>
-    </div>
-
-    <div class="status-row">
-      <span class="status-dot"></span>
-      <span>All systems operational</span>
-      <span class="version-tag">v3.5</span>
     </div>
   </div>
+
+  <!-- Auth Card -->
+  <div class="auth-panel-wrap">
+    <div class="auth-card">
+      <div class="card-logo-row">
+        <div class="card-logo">OX</div>
+        <span class="card-logo-text">ObserveX</span>
+      </div>
+      <div class="card-heading" id="cHeading">Sign in.</div>
+      <div class="card-sub" id="cSub">Access your ObserveX workspace.</div>
+
+      <div class="tabs">
+        <button class="tab-btn active" id="tabLogin" onclick="switchTab('login')">Sign In</button>
+        <button class="tab-btn" id="tabReg" onclick="switchTab('register')">Create Account</button>
+      </div>
+
+      <div class="msg-box err" id="errBox"><span>⚠</span><span id="errTxt"></span></div>
+      <div class="msg-box ok" id="okBox"><span>✓</span><span id="okTxt"></span></div>
+
+      <!-- LOGIN -->
+      <div class="auth-view" id="loginView">
+        <div class="form-gap">
+          <label class="form-label">Email Address</label>
+          <div class="iw">
+            <span class="ii"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/><path d="m22 6-10 7L2 6"/></svg></span>
+            <input class="form-input" id="lEmail" type="email" placeholder="you@company.com" autocomplete="email"/>
+          </div>
+        </div>
+        <div class="form-gap">
+          <label class="form-label">Password</label>
+          <div class="iw">
+            <span class="ii"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+            <input class="form-input" id="lPwd" type="password" placeholder="••••••••" autocomplete="current-password"/>
+            <button class="eye-btn" onclick="toggleEye('lPwd',this)" type="button"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <button class="submit-btn" id="lBtn" onclick="handleLogin()">
+          <span id="lBtnTxt">Sign In →</span>
+          <div class="spin" id="lSpin" style="display:none"></div>
+        </button>
+        <div class="or-div">or</div>
+        <button class="google-btn" onclick="showMsg('err','Google OAuth coming soon.')">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Continue with Google
+        </button>
+        <div class="card-footer">
+          <span class="cfl">New to ObserveX? <a href="?action=register" onclick="switchTab('register');return false">Create account</a></span>
+          <div class="status-chip"><span class="sd"></span>All systems up</div>
+        </div>
+      </div>
+
+      <!-- REGISTER -->
+      <div class="auth-view hidden" id="regView">
+        <div class="admin-banner">
+          <span style="font-size:22px">👑</span>
+          <div class="admin-banner-text">
+            <strong>Admin Account Registration</strong>
+            Create the organisation admin account. Invite team members later from Settings → Invite Codes.
+          </div>
+        </div>
+
+        <div class="row-2 form-gap">
+          <div>
+            <label class="form-label">First Name</label>
+            <input class="form-input ni" id="rFirst" type="text" placeholder="Alice" autocomplete="given-name"/>
+          </div>
+          <div>
+            <label class="form-label">Last Name</label>
+            <input class="form-input ni" id="rLast" type="text" placeholder="Chen" autocomplete="family-name"/>
+          </div>
+        </div>
+
+        <div class="form-gap">
+          <label class="form-label">Work Email</label>
+          <div class="iw">
+            <span class="ii"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/><path d="m22 6-10 7L2 6"/></svg></span>
+            <input class="form-input" id="rEmail" type="email" placeholder="alice@company.com" autocomplete="email"/>
+          </div>
+        </div>
+
+        <div class="form-gap">
+          <label class="form-label">Organisation Workspace</label>
+          <div class="iw" style="position:relative">
+            <span class="ii"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
+            <input class="form-input with-sfx" id="rWs" type="text" placeholder="my-company" autocomplete="off" oninput="slugifyWs(this)"/>
+            <span class="input-suffix">.observex</span>
+          </div>
+          <div class="info-note">Lowercase letters, numbers and hyphens only. This is your team's unique URL.</div>
+        </div>
+
+        <div class="form-gap">
+          <div class="role-hd">
+            <label class="form-label" style="margin:0">Your Role <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:none">(org creation requires Admin)</span></label>
+          </div>
+          <div class="role-grid" id="roleGrid">
+            <div class="role-card sel" data-role="admin" onclick="selectRole(this)"><span class="ri">👑</span><div class="rn">Admin</div><div class="rd">Full control</div></div>
+            <div class="role-card" data-role="manager" onclick="selectRole(this)"><span class="ri">📊</span><div class="rn">Manager</div><div class="rd">Manage teams</div></div>
+            <div class="role-card" data-role="developer" onclick="selectRole(this)"><span class="ri">💻</span><div class="rn">Developer</div><div class="rd">Build & debug</div></div>
+            <div class="role-card" data-role="tester" onclick="selectRole(this)"><span class="ri">🧪</span><div class="rn">Tester</div><div class="rd">QA & testing</div></div>
+            <div class="role-card" data-role="viewer" onclick="selectRole(this)"><span class="ri">👁️</span><div class="rn">Viewer</div><div class="rd">Read-only</div></div>
+            <div class="role-card" data-role="custom" onclick="selectRole(this)"><span class="ri">⚙️</span><div class="rn">Custom</div><div class="rd">Define later</div></div>
+          </div>
+          <div class="info-note warn-n" id="nonAdminWarn" style="display:none;margin-top:8px">⚠ Only <strong>Admin</strong> can create the organisation account. Other roles join via invite codes.</div>
+        </div>
+
+        <div class="form-gap">
+          <label class="form-label">Password</label>
+          <div class="iw">
+            <span class="ii"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+            <input class="form-input" id="rPwd" type="password" placeholder="Min 8 characters" autocomplete="new-password" oninput="checkPwStrength(this.value)"/>
+            <button class="eye-btn" onclick="toggleEye('rPwd',this)" type="button"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+          <div class="pw-bar" id="pwBar" style="display:none">
+            <div class="pw-track"><div class="pw-fill" id="pwFill"></div></div>
+            <div class="pw-label" id="pwLbl"></div>
+          </div>
+        </div>
+
+        <div class="form-gap">
+          <label class="form-label">Invitation Code <span class="opt">· Optional</span></label>
+          <div class="iw">
+            <span class="ii"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
+            <input class="form-input mono-i" id="rInvite" type="text" placeholder="OX-XXXX-XXXX" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/>
+          </div>
+          <div class="info-note"><strong>First admin setup:</strong> Leave blank to create your organisation. Admins can generate invite codes from <strong>Settings → Invite Codes</strong>.</div>
+        </div>
+
+        <button class="submit-btn" id="rBtn" onclick="handleRegister()">
+          <span id="rBtnTxt">Create Organisation →</span>
+          <div class="spin" id="rSpin" style="display:none"></div>
+        </button>
+        <div class="card-footer">
+          <span class="cfl">Have an account? <a href="?action=login" onclick="switchTab('login');return false">Sign in</a></span>
+          <div class="status-chip"><span class="sd"></span>v3.5</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
 </div>
 
-<!-- Demo hint -->
-<div class="demo-strip">
-  <svg viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-  Demo: <b>admin@observex.io</b> / <b>demo1234</b>
-</div>
+<div class="demo-banner">⚡ Demo: <strong>admin@observex.io</strong> / <strong>demo1234</strong> &nbsp;·&nbsp; <a href="#" onclick="demoFill();return false">Auto-fill →</a></div>
 
 <script>
-// ── Particle system ──
-(function(){
-  const wrap=document.getElementById('particles');
-  for(let i=0;i<40;i++){
-    const p=document.createElement('div');
-    p.className='p';
-    p.style.cssText=`left:${Math.random()*100}%;top:${Math.random()*100}%;--d:${3+Math.random()*6}s;--delay:${Math.random()*6}s`;
-    wrap.appendChild(p);
-  }
-})();
+/* Theme */
+let theme = localStorage.getItem('observex-theme') || 'light';
+function applyTheme(){ document.documentElement.classList.toggle('dark', theme==='dark'); document.getElementById('themeIcon').textContent = theme==='dark'?'☀':'☾'; }
+function toggleTheme(){ theme=theme==='dark'?'light':'dark'; localStorage.setItem('observex-theme',theme); applyTheme(); }
+applyTheme();
 
-// ── Auth utils ──
-async function hashPwd(password){
-  const encoder=new TextEncoder();
-  const data=encoder.encode(password+'observex-salt-2026');
-  const hash=await crypto.subtle.digest('SHA-256',data);
-  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
-}
-function getUsers(){try{return JSON.parse(localStorage.getItem('ox_users')||'[]');}catch{return [];}}
-function saveUsers(users){localStorage.setItem('ox_users',JSON.stringify(users));}
-function getInviteCodes(){
-  try{return JSON.parse(localStorage.getItem('ox_invite_codes')||'["OX-INIT-2026"]');}catch{return['OX-INIT-2026'];}
-}
-function createSession(user){
-  const session={uid:user.id,email:user.email,name:user.name,role:user.role,workspace:user.workspace,loginAt:Date.now()};
-  sessionStorage.setItem('ox_session',JSON.stringify(session));
-  localStorage.setItem('ox_last_workspace',user.workspace);
-}
-function showError(msg){
-  const b=document.getElementById('errorBox');
-  b.textContent=msg;b.style.display='block';
-  document.getElementById('successBox').style.display='none';
-}
-function showSuccess(msg){
-  const b=document.getElementById('successBox');
-  b.textContent=msg;b.style.display='block';
-  document.getElementById('errorBox').style.display='none';
-}
-function clearMessages(){
-  document.getElementById('errorBox').style.display='none';
-  document.getElementById('successBox').style.display='none';
-}
-function setLoading(btnId,loading){
-  const btn=document.getElementById(btnId);
-  btn.classList.toggle('loading',loading);
-  btn.disabled=loading;
+/* URL routing */
+function getAction(){ return new URLSearchParams(location.search).get('action')||'login'; }
+if(getAction()==='register'){
+  document.getElementById('tabLogin').classList.remove('active');
+  document.getElementById('tabReg').classList.add('active');
+  document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('regView').classList.remove('hidden');
+  document.getElementById('cHeading').textContent='Get started.';
+  document.getElementById('cSub').textContent='Create your organisation workspace.';
 }
 
-// ── Tab switching ──
 function switchTab(tab){
-  clearMessages();
-  document.getElementById('tabLogin').classList.toggle('active',tab==='login');
-  document.getElementById('tabSignup').classList.toggle('active',tab==='signup');
-  document.getElementById('loginPanel').classList.toggle('visible',tab==='login');
-  document.getElementById('loginPanel').classList.toggle('hidden',tab!=='login');
-  document.getElementById('signupPanel').classList.toggle('visible',tab==='signup');
-  document.getElementById('signupPanel').classList.toggle('hidden',tab!=='signup');
+  const isLogin=tab==='login';
+  document.getElementById('tabLogin').classList.toggle('active',isLogin);
+  document.getElementById('tabReg').classList.toggle('active',!isLogin);
+  document.getElementById('loginView').classList.toggle('hidden',!isLogin);
+  document.getElementById('regView').classList.toggle('hidden',isLogin);
+  document.getElementById('cHeading').textContent=isLogin?'Sign in.':'Get started.';
+  document.getElementById('cSub').textContent=isLogin?'Access your ObserveX workspace.':'Create your organisation workspace.';
+  clearMsgs();
+  const u=new URL(location.href); u.searchParams.set('action',isLogin?'login':'register'); history.replaceState(null,'',u.toString());
 }
 
-// ── Role selection ──
-let selectedRole='admin';
-function selectRole(role,el){
-  selectedRole=role;
-  document.querySelectorAll('.role-card').forEach(c=>c.classList.remove('selected'));
-  el.classList.add('selected');
+/* Particles */
+(function(){ const f=document.getElementById('ptf'); for(let i=0;i<50;i++){ const p=document.createElement('div'); p.className='pt'; p.style.cssText=`left:${Math.random()*100}%;top:${Math.random()*100}%;--d:${3+Math.random()*7}s;--dl:${Math.random()*8}s`; f.appendChild(p); } })();
+
+/* Auth */
+async function hashPwd(pw){ const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(pw+'ox-salt-2026')); return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join(''); }
+function getUsers(){ try{return JSON.parse(localStorage.getItem('ox_users')||'[]');}catch{return[];} }
+function saveUsers(u){ localStorage.setItem('ox_users',JSON.stringify(u)); }
+function getInvites(){ try{return JSON.parse(localStorage.getItem('ox_invite_codes')||'["OX-INIT-2026"]');}catch{return['OX-INIT-2026'];} }
+function createSession(u){ sessionStorage.setItem('ox_session',JSON.stringify({uid:u.id,email:u.email,name:u.name,role:u.role,workspace:u.workspace,loginAt:Date.now()})); localStorage.setItem('ox_last_workspace',u.workspace); }
+
+function showMsg(type,txt){ clearMsgs(); const b=document.getElementById(type==='err'?'errBox':'okBox'); document.getElementById(type==='err'?'errTxt':'okTxt').textContent=txt; b.style.display='flex'; }
+function clearMsgs(){ ['errBox','okBox'].forEach(id=>document.getElementById(id).style.display='none'); }
+
+function setBusy(btnId,spinId,busy){ document.getElementById(btnId).disabled=busy; document.getElementById(spinId).style.display=busy?'block':'none'; }
+
+function slugifyWs(el){ el.value=el.value.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/-+/g,'-'); }
+
+/* Role */
+let selRole='admin';
+function selectRole(card){
+  document.querySelectorAll('.role-card').forEach(c=>c.classList.remove('sel'));
+  card.classList.add('sel');
+  selRole=card.dataset.role;
+  document.getElementById('nonAdminWarn').style.display=selRole!=='admin'?'block':'none';
 }
 
-// ── Workspace slug ──
-function slugifyWorkspace(input){
-  input.value=input.value.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/-+/g,'-');
+/* PW strength */
+function checkPwStrength(pw){
+  const bar=document.getElementById('pwBar'),fill=document.getElementById('pwFill'),lbl=document.getElementById('pwLbl');
+  if(!pw){bar.style.display='none';return;}
+  bar.style.display='block';
+  let s=0;
+  if(pw.length>=8)s++;if(pw.length>=12)s++;if(/[A-Z]/.test(pw)&&/[a-z]/.test(pw))s++;if(/[0-9]/.test(pw))s++;if(/[^A-Za-z0-9]/.test(pw))s++;
+  const lv=[{w:'20%',c:'#ef4444',l:'Too weak'},{w:'40%',c:'#f97316',l:'Weak'},{w:'60%',c:'#fbbf24',l:'Fair'},{w:'80%',c:'#10b981',l:'Good'},{w:'100%',c:'#059669',l:'Strong 💪'}];
+  const x=lv[Math.min(s,4)]; fill.style.width=x.w; fill.style.background=x.c; lbl.textContent=x.l; lbl.style.color=x.c;
 }
 
-// ── Demo login ──
-async function demoLogin(){
-  // Seed demo user if not exists
+/* Eye */
+function toggleEye(id,btn){ const i=document.getElementById(id); const t=i.type==='text'; i.type=t?'password':'text'; btn.style.opacity=t?'0.5':'1'; }
+
+/* Demo */
+async function demoFill(){
   const users=getUsers();
   if(!users.find(u=>u.email==='admin@observex.io')){
     const hash=await hashPwd('demo1234');
-    users.push({id:'demo-001',email:'admin@observex.io',name:'Demo Admin',role:'admin',workspace:'fsbl-prod-ops',createdAt:Date.now(),hash});
+    users.push({id:'demo-001',email:'admin@observex.io',name:'Demo Admin',role:'admin',workspace:'demo-org',createdAt:Date.now(),hash,isOrgAdmin:true});
     saveUsers(users);
   }
-  document.getElementById('loginEmail').value='admin@observex.io';
-  document.getElementById('loginPassword').value='demo1234';
-  handleLogin();
+  document.getElementById('lEmail').value='admin@observex.io';
+  document.getElementById('lPwd').value='demo1234';
+  switchTab('login');
 }
 
-// ── LOGIN ──
+/* LOGIN */
 async function handleLogin(){
-  clearMessages();
-  const email=document.getElementById('loginEmail').value.trim();
-  const password=document.getElementById('loginPassword').value;
-  if(!email||!password){showError('Please enter email and password.');return;}
-  setLoading('loginBtn',true);
-  await new Promise(r=>setTimeout(r,600)); // UI feedback
-  const users=getUsers();
-  const user=users.find(u=>u.email===email);
-  if(!user){setLoading('loginBtn',false);showError('No account found with this email.');return;}
-  const hash=await hashPwd(password);
-  if(hash!==user.hash){setLoading('loginBtn',false);showError('Incorrect password. Try again.');return;}
+  clearMsgs();
+  const email=document.getElementById('lEmail').value.trim();
+  const pw=document.getElementById('lPwd').value;
+  if(!email||!pw){showMsg('err','Please enter email and password.');return;}
+  setBusy('lBtn','lSpin',true);
+  await new Promise(r=>setTimeout(r,700));
+  const users=getUsers(), user=users.find(u=>u.email===email);
+  if(!user){setBusy('lBtn','lSpin',false);showMsg('err','No account found with this email.');return;}
+  const hash=await hashPwd(pw);
+  if(hash!==user.hash){setBusy('lBtn','lSpin',false);showMsg('err','Incorrect password. Please try again.');return;}
   createSession(user);
-  showSuccess('Signed in! Redirecting…');
-  setTimeout(()=>{ window.location.href='/'; },700);
+  showMsg('ok',`Welcome back, ${user.name.split(' ')[0]}! Redirecting…`);
+  setTimeout(()=>{window.location.href='/';},800);
 }
 
-// ── SIGNUP ──
-async function handleSignup(){
-  clearMessages();
-  const first=document.getElementById('signupFirst').value.trim();
-  const last=document.getElementById('signupLast').value.trim();
-  const email=document.getElementById('signupEmail').value.trim();
-  const workspace=document.getElementById('signupWorkspace').value.trim();
-  const inviteCode=document.getElementById('signupInvite').value.trim().toUpperCase();
-  const password=document.getElementById('signupPassword').value;
-  selectedRole='admin';
-  if(!first||!email||!workspace||!password){showError('Please fill in first name, work email, workspace, and password.');return;}
-  if(password.length<8){showError('Password must be at least 8 characters.');return;}
-  if(!/^[a-z0-9-]+$/.test(workspace)){showError('Workspace: lowercase letters, numbers, hyphens only.');return;}
-  const validCodes=getInviteCodes();
-  if(inviteCode && !validCodes.includes(inviteCode)){showError('Invalid or expired invitation code. Leave it blank for first admin setup.');return;}
+/* REGISTER */
+async function handleRegister(){
+  clearMsgs();
+  const first=document.getElementById('rFirst').value.trim();
+  const last=document.getElementById('rLast').value.trim();
+  const email=document.getElementById('rEmail').value.trim();
+  const ws=document.getElementById('rWs').value.trim();
+  const pw=document.getElementById('rPwd').value;
+  const invite=document.getElementById('rInvite').value.trim().toUpperCase();
+  if(!first||!email||!ws||!pw){showMsg('err','Please fill in all required fields.');return;}
+  if(pw.length<8){showMsg('err','Password must be at least 8 characters.');return;}
+  if(!/^[a-z0-9-]+$/.test(ws)){showMsg('err','Workspace: lowercase letters, numbers and hyphens only.');return;}
+  if(invite&&!getInvites().includes(invite)){showMsg('err','Invalid or expired invite code. Leave blank for first admin setup.');return;}
+  if(selRole!=='admin'){showMsg('err','Organisation accounts require Admin role. Other roles join via invite codes.');return;}
   const users=getUsers();
-  if(users.find(u=>u.email===email)){showError('An account with this email already exists.');return;}
-  setLoading('signupBtn',true);
-  await new Promise(r=>setTimeout(r,800));
-  const hash=await hashPwd(password);
-  const newUser={
-    id:'user-'+Date.now(),
-    email,name:`${first} ${last}`.trim(),
-    role:selectedRole,workspace,
-    createdAt:Date.now(),hash,
-    invitedBy:inviteCode || null
-  };
-  users.push(newUser);
-  saveUsers(users);
-  // Remove init code after first admin
-  if(inviteCode==='OX-INIT-2026'&&selectedRole==='admin'){
-    const codes=getInviteCodes().filter(c=>c!=='OX-INIT-2026');
-    localStorage.setItem('ox_invite_codes',JSON.stringify(codes));
-  }
-  createSession(newUser);
-  showSuccess(`Account created! Welcome, ${first}. Redirecting…`);
-  setTimeout(()=>{ window.location.href='/'; },900);
+  if(users.find(u=>u.email===email)){showMsg('err','An account with this email already exists.');return;}
+  if(users.find(u=>u.workspace===ws)){showMsg('err','This workspace name is already taken.');return;}
+  setBusy('rBtn','rSpin',true);
+  await new Promise(r=>setTimeout(r,900));
+  const hash=await hashPwd(pw);
+  const nu={id:'user-'+Date.now(),email,name:`${first} ${last}`.trim(),role:selRole,workspace:ws,createdAt:Date.now(),hash,invitedBy:invite||null,isOrgAdmin:true,org:{name:ws,createdAt:Date.now()}};
+  users.push(nu);
+  saveUsers(nu.id!==undefined?users:users);
+  /* rotate init code */
+  if(invite==='OX-INIT-2026'){ localStorage.setItem('ox_invite_codes',JSON.stringify(getInvites().filter(c=>c!=='OX-INIT-2026'))); }
+  createSession(nu);
+  showMsg('ok',`Organisation created! Welcome, ${first}. Redirecting…`);
+  setTimeout(()=>{window.location.href='/';},1000);
 }
 
-// ── Enter key shortcut ──
+/* Enter key */
 document.addEventListener('keydown',e=>{
-  if(e.key==='Enter'){
-    if(document.getElementById('loginPanel').classList.contains('visible'))handleLogin();
-    else handleSignup();
-  }
+  if(e.key!=='Enter')return;
+  if(!document.getElementById('loginView').classList.contains('hidden'))handleLogin();
+  else handleRegister();
 });
 
-// Check if already logged in
+/* Already logged in */
 if(sessionStorage.getItem('ox_session')){ window.location.href='/'; }
 </script>
 </body>
