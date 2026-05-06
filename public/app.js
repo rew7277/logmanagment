@@ -32,7 +32,8 @@ const icons = {
   ops:'<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M3 12h4M17 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>',
   rca:'<svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V20h8v-4.3A7 7 0 0 0 12 3Z"/><path d="M9 21h6"/></svg>',
   docs:'<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v6h5M9 14h6M9 18h6"/></svg>',
-  uploads:'<svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 17V11M9.5 13.5 12 11l2.5 2.5"/></svg>'
+  uploads:'<svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 17V11M9.5 13.5 12 11l2.5 2.5"/></svg>',
+  settings:'<svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3.5-.2-.1a1.7 1.7 0 0 0-2 .2l-.7.4a1.7 1.7 0 0 0-1 1.5V23h-4v-.5a1.7 1.7 0 0 0-1-1.5l-.7-.4a1.7 1.7 0 0 0-2-.2l-.2.1-2-3.5.1-.1A1.7 1.7 0 0 0 4.6 15v-.9a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3.5.2.1a1.7 1.7 0 0 0 2-.2l.7-.4a1.7 1.7 0 0 0 1-1.5V6h4v.5a1.7 1.7 0 0 0 1 1.5l.7.4a1.7 1.7 0 0 0 2 .2l.2-.1 2 3.5-.1.1a1.7 1.7 0 0 0-.3 1.9v.9Z"/></svg>'
 };
 
 function esc(v){return String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
@@ -65,9 +66,9 @@ function setPage(page){
   state.page=(page==='traces'?'logs':(page==='endpoints'?'apis':(page||'overview')));
   $$('.page').forEach(x=>x.classList.toggle('active',x.dataset.page===state.page));
   $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.pageLink===state.page));
-  const titles={overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',apiDocs:'API Docs'};
+  const titles={overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',settings:'Settings',apiDocs:'API Docs'};
   setText('pageTitle',titles[state.page]||'Overview');
-  $('topActions')&&$('topActions').classList.toggle('visible',state.page!=='logs');
+  $('topActions')&&$('topActions').classList.add('visible');
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
   if(state.page==='logs')    { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
@@ -75,6 +76,7 @@ function setPage(page){
   if(state.page==='uploads') { loadUploadHistory(); loadDeployImpact(); }
   if(state.page==='alerts') { loadAlertsOps(); loadAlertRules(); }
   if(state.page==='ops') { loadAlertsOps(); }
+  if(state.page==='settings') { renderEnvButtons(); }
   if(state.page==='apiDocs') { renderApiDoc('apiIngest'); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
@@ -94,7 +96,7 @@ function routeMetric(action, m={}){
   set('serviceFilter',''); refreshPathFilter(); set('pathFilter',''); state.traceFilter=''; state.uploadFilter='';
   if(action==='errors' || action==='spike'){ set('severityFilter','ERROR'); set('quickTime', action==='spike'?'1h':'24h'); set('logQuery',''); }
   else if(action==='top-error'){ set('severityFilter','ERROR'); set('quickTime','24h'); set('logQuery', String(m.top_error_signature||'').slice(0,120)); }
-  else if(action==='latency'){ set('severityFilter',''); set('quickTime','24h'); set('logQuery','latency'); }
+  else if(action==='latency'){ set('severityFilter',''); set('quickTime','24h'); set('logQuery','latency OR p95 OR timeout'); }
   else { set('severityFilter',''); set('quickTime', action==='throughput'?'1h':'all'); set('logQuery',''); }
   searchLogs(1);
   toast('Opened related log view','success');
@@ -999,30 +1001,27 @@ function setOverviewChrome(m={}){
   }
 }
 function renderOverviewPulse(m){
-  const metricsEl=$('metrics'); if(!metricsEl) return;
-  let pulse=$('overviewPulse');
-  if(!pulse){ pulse=document.createElement('section'); pulse.id='overviewPulse'; pulse.className='overview-pulse card visual-pulse v41-pulse'; metricsEl.insertAdjacentElement('afterend',pulse); }
-  const errRate=Number(m.error_rate||0), spikePct=Number(m.error_spike_percent||0), throughput=Number(m.throughput_1h||0);
+  const pulse=$('overviewPulse'); if(!pulse) return;
+  const errRate=Number(m.error_rate||0), throughput=Number(m.throughput_1h||0);
   const recentErr=Number(m.recent_errors_1h||0), prevErr=Number(m.previous_errors_1h||0), p95=Number(m.p95_latency_ms||0);
   const maxErr=Math.max(1,recentErr,prevErr);
-  const prevH=Math.max(6,Math.round((prevErr/maxErr)*100));
-  const latestH=Math.max(6,Math.round((recentErr/maxErr)*100));
-  const delta=prevErr?(((recentErr-prevErr)/prevErr)*100):(recentErr?100:0);
-  const arrow=delta<0?'↓':delta>0?'↑':'→';
-  const risk=Math.max(0,Math.min(100,Math.round((errRate*1.4)+Math.max(0,delta)*.25+(p95?Math.min(25,p95/80):0)+(Number(m.active_alerts||0)*5))));
-  const top=String(m.top_error_signature||'No errors observed');
+  const prevH=Math.max(8,Math.round((prevErr/maxErr)*100));
+  const latestH=Math.max(8,Math.round((recentErr/maxErr)*100));
+  const delta=prevErr ? ((recentErr-prevErr)/prevErr)*100 : (recentErr>0?100:0);
+  const risk=Math.max(0,Math.min(100,Math.round((errRate*1.35)+(Math.max(0,delta)/10)+(Number(m.active_alerts||0)*6)+(p95?Math.min(25,p95/100):0))));
+  const top=String(m.top_error_signature||'No dominant error detected');
   pulse.innerHTML=`
-    <div class="section-head pulse-title"><div><h3>Operational Pulse</h3><span>Error trend (last 1h vs previous 1h)</span></div><div class="pulse-help" title="Operational Pulse compares recent errors, spike growth, throughput, and latency to show production pressure.">?</div></div>
-    <div class="pulse-dashboard">
-      <button class="pulse-trend-card" data-metric-action="spike" title="Click to open latest spike logs">
-        <div class="trend-bars" aria-label="Previous ${fmt(prevErr)}, latest ${fmt(recentErr)}">
+    <div class="section-head pulse-title"><div><h3>Operational Pulse</h3><span>Error trend (last 1h vs previous 1h)</span></div><button class="pulse-help" title="Operational Pulse compares latest errors, previous errors, throughput, and latency to highlight production pressure.">?</button></div>
+    <div class="pulse-dashboard command-pulse-grid">
+      <button class="pulse-trend-card" data-metric-action="spike" title="Open latest spike logs">
+        <div class="trend-bars" aria-label="Previous ${fmt(prevErr)} latest ${fmt(recentErr)}">
           <div><i style="height:${prevH}%"></i><span>Previous<br><b>${fmt(prevErr)}</b></span></div>
           <div class="latest"><i style="height:${latestH}%"></i><span>Latest<br><b>${fmt(recentErr)}</b></span></div>
         </div>
         <p>Previous 1h vs Latest 1h error count</p>
       </button>
       <div class="pulse-indicators">
-        ${pulseIndicator('Error rate', fmtPct(errRate), `${delta<=0?'decreasing':'watching'} ${arrow}`, errRate>5?'bad':errRate>1?'warn':'good', 'errors')}
+        ${pulseIndicator('Error rate', fmtPct(errRate), `${delta<=0?'↓ decreasing':'↑ watching'}`, errRate>5?'bad':errRate>1?'warn':'good', 'errors')}
         ${pulseIndicator('Spike growth', `${delta.toFixed(2)}%`, delta<0?'↓ decreasing':delta>0?'↑ increasing':'stable', delta>0?'bad':'good', 'spike')}
         ${pulseIndicator('Throughput', fmt(throughput), throughput===0?'Check ingestion':'Receiving events', throughput===0?'warn':'good', 'throughput')}
       </div>
@@ -1033,7 +1032,7 @@ function renderOverviewPulse(m){
         <button data-metric-action="throughput">Last-hour log stream</button>
       </div>
     </div>
-    <div class="risk-ai-grid">
+    <div class="risk-ai-grid command-risk-grid">
       <button class="risk-compass-card" data-metric-action="top-error" title="Open dominant error group">
         <div class="risk-dial" style="--risk:${risk}"><span>${risk}/100</span></div>
         <div><h4>Risk Compass</h4><p>Combined operational pressure</p></div>
@@ -1041,7 +1040,7 @@ function renderOverviewPulse(m){
       <button class="dominant-error-card" data-metric-action="top-error">
         <span>Dominant error</span><b>${fmt(m.top_error_count||0)} events</b><p title="${esc(top)}">${esc(top)}</p>
       </button>
-      <div class="ai-insight v41-ai"><div><b>AI investigation hint</b><button class="help-icon" title="AI hint is generated from current error spike, throughput, latency, alerts, and top error group.">?</button></div><span>${esc(buildInsight(m))}</span><button class="run-deep" type="button" data-metric-action="top-error">Run deep analysis</button></div>
+      <div class="ai-insight v41-ai"><div><b>AI investigation hint</b><button class="help-icon" title="Generated from error rate, spike growth, throughput, latency, alerts, and dominant error group.">?</button></div><span>${esc(buildInsight(m))}</span><button class="run-deep" type="button" data-metric-action="top-error">Run deep analysis</button></div>
     </div>`;
   $$('#overviewPulse [data-metric-action]').forEach(btn=>btn.onclick=()=>routeMetric(btn.dataset.metricAction,m));
 }
@@ -1075,6 +1074,6 @@ async function loadOverview(){
   }catch(e){toast(e.message,'error');}
 }
 
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();}; if($('overviewRange')) $('overviewRange').onchange=()=>loadOverview();if($('appSignOutBtn')) $('appSignOutBtn').onclick=async()=>{try{await fetch('/api/auth/logout',{method:'POST',credentials:'include'});}catch(e){} location.href='/signin.html';};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files&&files.length)uploadManyFiles(files);});fi.onchange=()=>{if(fi.files&&fi.files.length)uploadManyFiles(fi.files);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
-async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);$('overviewEnvBadge')&&($('overviewEnvBadge').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();}; if($('overviewRange')) $('overviewRange').onchange=()=>loadOverview(); if($('overviewEnvSelect')) $('overviewEnvSelect').onchange=async(e)=>{state.environment=String(e.target.value||'PROD').toUpperCase(); localStorage.setItem('observex-env',state.environment); try{await api(`/api/${state.workspace}/environments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:state.environment})});}catch{} await refreshAll();}; const signOut=async()=>{try{await fetch('/api/auth/logout',{method:'POST',credentials:'include'});}catch(e){} location.href='/signin.html';}; if($('appSignOutBtn')) $('appSignOutBtn').onclick=signOut; if($('topSignOutBtn')) $('topSignOutBtn').onclick=signOut; if($('settingsBackOverview')) $('settingsBackOverview').onclick=()=>setPage('overview');$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files&&files.length)uploadManyFiles(files);});fi.onchange=()=>{if(fi.files&&fi.files.length)uploadManyFiles(fi.files);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);$('overviewEnvBadge')&&($('overviewEnvBadge').textContent=state.environment); if($('overviewEnvSelect')) $('overviewEnvSelect').value=state.environment; renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
