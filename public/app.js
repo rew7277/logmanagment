@@ -1306,15 +1306,23 @@ function createApproval(title,description){
   toast('Approval request created','success');
 }
 
-// ── TOPOLOGY ──
-let topoNodes=[],topoEdges=[],topoAnimFrame=null,topoSelected=null,topoLoadedKey='';
-const topoColors={healthy:'#10b981',degraded:'#f59e0b',down:'#f43f5e',unknown:'#6b7280',external:'#a78bfa'};
+// ── TOPOLOGY v31 — API-scoped flow view ──
+let topoAllNodes=[], topoAllEdges=[];       // full dataset from server
+let topoNodes=[], topoEdges=[];             // currently visible (scoped or all)
+let topoAnimFrame=null, topoSelected=null, topoLoadedKey='';
+let topoScopeApi=null;                      // null = show all; string = API name filter
 
+const topoColors={
+  healthy:'#10b981', degraded:'#f59e0b', down:'#f43f5e',
+  unknown:'#6b7280', external:'#a78bfa'
+};
+
+// ── Normalize raw server payload ──
 function normalizeTopoPayload(payload){
   const nodes=(payload.nodes||[]).map((n,i)=>({
     id:n.id||n.service_name||n.label||`svc-${i}`,
-    label:n.label||n.service_name||n.id||'Unknown endpoint',
-    type:n.type|| (n.is_external?'external':'endpoint'),
+    label:n.label||n.service_name||n.id||'Unknown',
+    type:n.type||(n.is_external?'external':'endpoint'),
     isExternal:!!(n.is_external||n.type==='external'),
     status:n.status||'healthy',
     calls:Number(n.calls||0),
@@ -1322,6 +1330,7 @@ function normalizeTopoPayload(payload){
     successRate:Number(n.success_rate||100),
     p95:Number(n.p95_latency_ms||0),
     avgLatency:Number(n.avg_latency_ms||0),
+    service:n.service||n.api_name||'',   // which API this endpoint belongs to
     x:0,y:0
   }));
   const ids=new Set(nodes.map(n=>n.id));
@@ -1339,23 +1348,137 @@ function normalizeTopoPayload(payload){
   return {nodes,edges,summary:payload.summary||{}};
 }
 
+// ── Load full topology from API ──
 async function loadTopologyData(force=false){
   const key=`${state.workspace}:${state.environment}`;
-  if(!force && topoLoadedKey===key && topoNodes.length) return;
+  if(!force && topoLoadedKey===key && topoAllNodes.length) return;
   const payload=await api(endpoint('/topology'));
   const data=normalizeTopoPayload(payload);
-  topoNodes=data.nodes; topoEdges=data.edges; topoLoadedKey=key;
-  renderTopoMetrics(data.summary);
+  topoAllNodes=data.nodes;
+  topoAllEdges=data.edges;
+  topoLoadedKey=key;
+  renderTopoApiPills();
+  applyTopoScope(topoScopeApi);
+}
+
+// ── Render the API pill selector ──
+function renderTopoApiPills(){
+  const el=$('topoApiPills'); if(!el) return;
+  // Get unique API/service names from non-external nodes
+  const apis=[...new Set(topoAllNodes.filter(n=>!n.isExternal).map(n=>{
+    // Try to extract API name: label might be "POST /path" or "s-api-name"
+    const s=n.service||n.label||'';
+    // If label looks like "METHOD /path", group by service field or label start
+    if(n.service) return n.service;
+    // Otherwise use the API name prefix from node id
+    const idParts=(n.id||'').split(':');
+    if(idParts.length>1) return idParts[0];
+    return null;
+  }).filter(Boolean))].sort();
+
+  if(!apis.length){
+    el.innerHTML='';
+    return;
+  }
+  el.innerHTML=apis.map(api=>`
+    <button class="topo-api-pill ${topoScopeApi===api?'active':''}" onclick="scopeTopoToApi('${esc(api)}')" title="View ${esc(api)} topology">
+      ${esc(api.replace(/^s-/,'').replace(/-api$/,''))}
+    </button>
+  `).join('');
+}
+
+// ── Scope topology to one API (or clear scope) ──
+function scopeTopoToApi(apiName){
+  topoScopeApi=apiName;
+  applyTopoScope(apiName);
+  // Update pills active state
+  $$('.topo-api-pill').forEach(p=>p.classList.toggle('active', p.textContent.trim()===apiName.replace(/^s-/,'').replace(/-api$/,'')));
+  const backBtn=$('topoBackBtn'); if(backBtn) backBtn.hidden=false;
+  const lbl=$('topoScopeLabel'); if(lbl) lbl.textContent=`${apiName} — API flow view`;
+  const hint=$('topoLegendHint'); if(hint) hint.textContent=`Showing: ${apiName} endpoints → dependencies`;
+  const canvas=$('topoCanvas'); if(canvas){ layoutTopo(canvas); }
+  renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
+  drawTopo();
+}
+
+function clearTopoScope(){
+  topoScopeApi=null;
+  applyTopoScope(null);
+  $$('.topo-api-pill').forEach(p=>p.classList.remove('active'));
+  const backBtn=$('topoBackBtn'); if(backBtn) backBtn.hidden=true;
+  const lbl=$('topoScopeLabel'); if(lbl) lbl.textContent='Full service topology';
+  const hint=$('topoLegendHint'); if(hint) hint.textContent='Click an API pill to scope view';
+  const canvas=$('topoCanvas'); if(canvas){ layoutTopo(canvas); }
+  renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
+  drawTopo();
+}
+
+// ── Filter nodes+edges to scoped API ──
+function applyTopoScope(apiName){
+  if(!apiName){
+    topoNodes=[...topoAllNodes];
+    topoEdges=[...topoAllEdges];
+    renderTopoMetrics({});
+    return;
+  }
+  // Find nodes belonging to this API
+  // Match by: node.service === apiName, or node.id contains apiName, or label matches
+  const matchNode=n=>{
+    if(n.service && n.service===apiName) return true;
+    if(n.id && (n.id.startsWith(apiName+':') || n.id===apiName)) return true;
+    // label match: "POST /path" style — check if any edge connects them to this API
+    return false;
+  };
+
+  // Get edges that involve this API's nodes (from-side must be API endpoints)
+  // Since nodes may not have service field, also filter by which edges come from
+  // nodes whose id prefix matches the API
+  let scopedEdges=topoAllEdges.filter(e=>{
+    const fromNode=topoAllNodes.find(n=>n.id===e.from);
+    const toNode=topoAllNodes.find(n=>n.id===e.to);
+    if(!fromNode||!toNode) return false;
+    // Include edge if from-node belongs to API, or if it's an internal-to-internal edge of the API
+    return matchNode(fromNode) || (fromNode.service===apiName) ||
+           (e.from===apiName) || (e.to===apiName);
+  });
+
+  // If no edges matched by service, fall back: include edges where from or to label matches apiName
+  if(!scopedEdges.length){
+    scopedEdges=topoAllEdges.filter(e=>{
+      const fromNode=topoAllNodes.find(n=>n.id===e.from);
+      return fromNode && (fromNode.label.includes(apiName)||fromNode.id.includes(apiName));
+    });
+  }
+  // If still nothing, include all edges (API may not have service tagging)
+  if(!scopedEdges.length) scopedEdges=[...topoAllEdges];
+
+  // Collect all node IDs referenced by scoped edges
+  const scopedIds=new Set([...scopedEdges.map(e=>e.from), ...scopedEdges.map(e=>e.to)]);
+
+  // Also include all nodes belonging to this API even if orphaned
+  topoAllNodes.filter(n=>matchNode(n)||n.id===apiName).forEach(n=>scopedIds.add(n.id));
+
+  topoNodes=topoAllNodes.filter(n=>scopedIds.has(n.id));
+  topoEdges=scopedEdges;
+
+  // Recompute metrics for scoped view
+  const totalCalls=topoEdges.reduce((a,e)=>a+e.calls,0);
+  const avgLatency=Math.round(topoEdges.reduce((a,e)=>a+(e.avgLatency||0),0)/Math.max(1,topoEdges.length));
+  renderTopoMetrics({
+    total_calls:totalCalls,
+    avg_latency_ms:avgLatency,
+    dependencies:topoEdges.filter(e=>{const t=topoNodes.find(n=>n.id===e.to);return t&&t.isExternal;}).length
+  });
 }
 
 function renderTopoMetrics(summary={}){
   const el=$('topoMetricsOverlay'); if(!el) return;
   const totalCalls=summary.total_calls ?? topoEdges.reduce((a,e)=>a+e.calls,0);
   const avgLatency=summary.avg_latency_ms ?? Math.round(topoEdges.reduce((a,e)=>a+(e.avgLatency||0),0)/Math.max(1,topoEdges.length));
-  const errorRate=summary.error_rate ?? (topoNodes.reduce((a,n)=>a+n.errorRate,0)/Math.max(1,topoNodes.length));
-  const deps=summary.dependencies ?? topoEdges.length;
+  const errorPct=(topoNodes.reduce((a,n)=>a+n.errorRate,0)/Math.max(1,topoNodes.length)).toFixed(1);
+  const deps=summary.dependencies ?? topoEdges.filter(e=>{const t=topoNodes.find(n=>n.id===e.to);return t&&t.isExternal;}).length;
   el.innerHTML=`
-    <div class="topo-metric"><small>Observed endpoints</small><b>${fmt(topoNodes.filter(n=>!n.isExternal).length)}</b></div>
+    <div class="topo-metric"><small>Endpoints</small><b>${fmt(topoNodes.filter(n=>!n.isExternal).length)}</b></div>
     <div class="topo-metric"><small>Dependencies</small><b>${fmt(deps)}</b></div>
     <div class="topo-metric"><small>Traffic</small><b>${fmt(totalCalls)}</b></div>
     <div class="topo-metric"><small>Avg latency</small><b>${fmtMs(avgLatency)}</b></div>`;
@@ -1366,52 +1489,58 @@ async function buildTopoFromLogs(force=false){
     await loadTopologyData(force);
     setText('topoSourceText', topoEdges.length ? 'Endpoint traffic + downstream calls' : 'No endpoint dependency data yet');
   }catch(e){
-    topoNodes=[]; topoEdges=[]; topoLoadedKey='';
+    topoAllNodes=[]; topoAllEdges=[]; topoNodes=[]; topoEdges=[]; topoLoadedKey='';
     toast(`Topology unavailable: ${e.message}`,'error');
   }
 }
 
+// ── LAYOUT: position nodes for clear left→right flow ──
 function layoutTopo(canvas){
   const rect=canvas.getBoundingClientRect();
-  const W=rect.width||canvas.width||1000, H=rect.height||canvas.height||520;
+  const W=rect.width||canvas.width||1000, H=rect.height||canvas.height||560;
   if(!topoNodes.length) return;
 
-  const endpointNodes = topoNodes.filter(n=>!n.isExternal).sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
-  const depNodes = topoNodes.filter(n=>n.isExternal).sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
-  const connectedDeps = new Set(topoEdges.map(e=>e.to));
-  const connectedEndpoints = new Set(topoEdges.map(e=>e.from));
+  const endpointNodes=topoNodes.filter(n=>!n.isExternal)
+    .sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
+  const depNodes=topoNodes.filter(n=>n.isExternal)
+    .sort((a,b)=>(b.calls||0)-(a.calls||0)||String(a.label).localeCompare(String(b.label)));
 
-  const placeColumn = (arr, x, top=64, bottom=64) => {
+  const connectedDeps=new Set(topoEdges.map(e=>e.to));
+  const connectedEndpoints=new Set(topoEdges.map(e=>e.from));
+
+  // Three-column layout: CLIENT → [API ENDPOINTS] → [EXTERNAL DEPS]
+  // With a center column for the API/service node if scoped
+  const leftX=Math.max(130, W*0.18);
+  const rightX=Math.min(W-130, W*0.82);
+
+  const placeColumn=(arr,x,topPad=70,botPad=50)=>{
     if(!arr.length) return;
-    const usable=Math.max(120,H-top-bottom);
-    const step=arr.length===1?0:Math.min(72, usable/(arr.length-1));
+    const usable=Math.max(100, H-topPad-botPad);
+    const minStep=56, maxStep=88;
+    const step=arr.length===1?0:Math.min(maxStep, Math.max(minStep, usable/(arr.length-1)));
     const total=step*(arr.length-1);
-    const y0=H/2-total/2;
-    arr.forEach((n,i)=>{ n.x=x; n.y=Math.max(42,Math.min(H-42,y0+i*step)); });
+    const y0=Math.max(topPad, H/2-total/2);
+    arr.forEach((n,i)=>{ n.x=x; n.y=Math.max(topPad, Math.min(H-botPad, y0+i*step)); });
   };
 
-  // Endpoint-only service map: API endpoints on the left, downstream API dependencies on the right.
-  // This avoids misleading diagonal spaghetti and makes the flow direction obvious.
-  const leftX = Math.max(90, Math.min(210, W*0.16));
-  const rightX = Math.max(leftX+260, W-110);
-  placeColumn(endpointNodes, leftX, 54, 54);
-  placeColumn(depNodes, rightX, 74, 74);
+  placeColumn(endpointNodes, leftX, 72, 52);
+  placeColumn(depNodes, rightX, 72, 52);
 
-  // Pull frequently connected dependencies slightly toward their source vertical center.
+  // Align dep nodes vertically with their primary caller
   depNodes.forEach(dep=>{
-    const incoming=topoEdges.filter(e=>e.to===dep.id).map(e=>topoNodes.find(n=>n.id===e.from)).filter(Boolean);
-    if(incoming.length){
-      const weighted=incoming.reduce((a,n)=>a+n.y,0)/incoming.length;
-      dep.y=Math.max(42,Math.min(H-42,weighted));
+    const callers=topoEdges.filter(e=>e.to===dep.id)
+      .map(e=>topoNodes.find(n=>n.id===e.from)).filter(Boolean);
+    if(callers.length){
+      const avgY=callers.reduce((a,n)=>a+n.y,0)/callers.length;
+      dep.y=Math.max(72, Math.min(H-52, avgY));
     }
   });
 
-  // If a node has no dependencies yet, keep it visible but slightly muted in the same API lane.
   endpointNodes.forEach(n=>{ n.orphan=!connectedEndpoints.has(n.id); });
   depNodes.forEach(n=>{ n.orphan=!connectedDeps.has(n.id); });
 }
 
-// Stable canvas size — set once, not on every frame
+// ── CANVAS: stable size management ──
 let _topoCanvasW=0, _topoCanvasH=0, _topoDpr=1;
 function syncTopoCanvas(canvas){
   const dpr=window.devicePixelRatio||1;
@@ -1426,171 +1555,294 @@ function syncTopoCanvas(canvas){
   }
   return true;
 }
+
+// ── DRAW: the main animation loop ──
 function drawTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
-  if(state.page !== 'topology'){ if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} return; }
-  if(!syncTopoCanvas(canvas)) { topoAnimFrame=requestAnimationFrame(drawTopo); return; }
+  if(state.page!=='topology'){ if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} return; }
+  if(!syncTopoCanvas(canvas)){ topoAnimFrame=requestAnimationFrame(drawTopo); return; }
   const ctx=canvas.getContext('2d');
   const rect=canvas.getBoundingClientRect();
-  const W=rect.width,H=rect.height;
+  const W=rect.width, H=rect.height;
   ctx.clearRect(0,0,W,H);
   const isDark=document.documentElement.classList.contains('dark');
+  const now=performance.now();
 
-  // Stable background and column headers
+  // Column headers
   ctx.save();
-  ctx.fillStyle=isDark?'rgba(2,6,23,.12)':'rgba(248,250,252,.70)';
-  roundRect(ctx,10,10,W-20,H-20,18); ctx.fill();
-  ctx.font='900 11px DM Sans,system-ui'; ctx.textAlign='left'; ctx.textBaseline='top';
-  ctx.fillStyle=isDark?'#94a3b8':'#64748b';
-  ctx.fillText('OBSERVED API ENDPOINTS',24,24);
-  ctx.textAlign='right'; ctx.fillText('DOWNSTREAM API DEPENDENCIES',W-24,24);
+  ctx.font='600 10px Plus Jakarta Sans,system-ui'; ctx.textBaseline='top';
+  ctx.fillStyle=isDark?'rgba(148,163,184,.55)':'rgba(100,116,139,.55)';
+  const eCount=topoNodes.filter(n=>!n.isExternal).length;
+  const dCount=topoNodes.filter(n=>n.isExternal).length;
+  if(eCount){
+    const leftX=topoNodes.find(n=>!n.isExternal)?.x||130;
+    ctx.textAlign='center'; ctx.fillText('API ENDPOINTS', leftX, 18);
+  }
+  if(dCount){
+    const rightX=topoNodes.find(n=>n.isExternal)?.x||W-130;
+    ctx.textAlign='center'; ctx.fillText('DOWNSTREAM SERVICES', rightX, 18);
+  }
   ctx.restore();
 
-  if(!topoNodes.length){ctx.fillStyle=isDark?'#94a3b8':'#64748b';ctx.font='700 14px DM Sans,system-ui';ctx.textAlign='center';ctx.fillText('No topology yet. Upload logs with endpoint paths and downstream request messages.',W/2,H/2);return;}
-  if(!topoEdges.length){
-    ctx.fillStyle=isDark?'#94a3b8':'#64748b';ctx.font='700 13px DM Sans,system-ui';ctx.textAlign='center';
-    ctx.fillText('Endpoints were detected, but no downstream API calls were found in the log messages.',W/2,52);
+  if(!topoNodes.length){
+    // Empty state
+    ctx.save();
+    ctx.fillStyle=isDark?'rgba(148,163,184,.4)':'rgba(100,116,139,.35)';
+    ctx.font='600 15px Plus Jakarta Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('No topology data — upload logs with downstream API calls to build the map', W/2, H/2);
+    ctx.restore();
+    topoAnimFrame=requestAnimationFrame(drawTopo); return;
   }
-  const now=performance.now();
+  if(!topoEdges.length){
+    ctx.save();
+    ctx.fillStyle=isDark?'rgba(148,163,184,.4)':'rgba(100,116,139,.35)';
+    ctx.font='600 13px Plus Jakarta Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('Endpoints detected — no downstream API calls found in log messages yet', W/2, H/2+30);
+    ctx.restore();
+  }
+
   const nodeById=new Map(topoNodes.map(n=>[n.id,n]));
 
+  // ── Draw edges ──
   topoEdges.forEach((e,idx)=>{
     const from=nodeById.get(e.from), to=nodeById.get(e.to); if(!from||!to) return;
-    const degraded=e.errorRate>1||e.status==='error';
-    const bend=Math.max(120,Math.abs(to.x-from.x)*0.44);
+    const isError=e.errorRate>1||e.status==='error';
+    const nodeR=23;
+
+    // Bezier control points for smooth S-curve
+    const dx=to.x-from.x;
+    const bend=Math.max(80, dx*0.45);
     const c1x=from.x+bend, c1y=from.y;
     const c2x=to.x-bend, c2y=to.y;
+    const startX=from.x+nodeR, startY=from.y;
+    const endX=to.x-nodeR, endY=to.y;
+
+    // Edge line
     ctx.save();
-    ctx.beginPath(); ctx.moveTo(from.x+28,from.y); ctx.bezierCurveTo(c1x,c1y,c2x,c2y,to.x-28,to.y);
-    const grad=ctx.createLinearGradient(from.x,from.y,to.x,to.y);
-    grad.addColorStop(0,degraded?'rgba(244,63,94,.72)':'rgba(59,130,246,.48)');
-    grad.addColorStop(1,degraded?'rgba(251,113,133,.95)':'rgba(34,211,238,.88)');
-    ctx.strokeStyle=grad; ctx.lineWidth=Math.max(1.6,Math.min(6,1+Math.log10((e.calls||1)+1)*1.8));
-    ctx.setLineDash(degraded?[7,5]:[]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(startX,startY);
+    ctx.bezierCurveTo(c1x,c1y,c2x,c2y,endX,endY);
+    const grad=ctx.createLinearGradient(startX,startY,endX,endY);
+    if(isError){
+      grad.addColorStop(0,'rgba(244,63,94,.6)');
+      grad.addColorStop(1,'rgba(251,113,133,.9)');
+      ctx.setLineDash([8,5]);
+    } else {
+      grad.addColorStop(0,'rgba(59,130,246,.5)');
+      grad.addColorStop(1,'rgba(34,211,238,.85)');
+    }
+    ctx.strokeStyle=grad;
+    ctx.lineWidth=Math.max(1.8, Math.min(5, 1.2+Math.log10((e.calls||1)+1)*1.6));
+    ctx.stroke(); ctx.setLineDash([]);
 
-    // arrowhead
-    const angle=Math.atan2(to.y-c2y,to.x-c2x), ax=to.x-31*Math.cos(angle), ay=to.y-31*Math.sin(angle);
-    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax-9*Math.cos(angle-.42),ay-9*Math.sin(angle-.42)); ctx.lineTo(ax-9*Math.cos(angle+.42),ay-9*Math.sin(angle+.42)); ctx.closePath();
-    ctx.fillStyle=degraded?'#fb7185':'#38bdf8'; ctx.fill();
+    // Arrowhead at destination
+    const angle=Math.atan2(endY-c2y, endX-c2x);
+    const ax=endX-2*Math.cos(angle), ay=endY-2*Math.sin(angle);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax-10*Math.cos(angle-.4), ay-10*Math.sin(angle-.4));
+    ctx.lineTo(ax-10*Math.cos(angle+.4), ay-10*Math.sin(angle+.4));
+    ctx.closePath();
+    ctx.fillStyle=isError?'#fb7185':'#38bdf8'; ctx.fill();
 
-    // animated packet using cubic Bezier
-    const t=((now/1700)+(idx%11)/11)%1;
+    // Animated packet dot on bezier path
+    const t=((now/1800)+(idx%13)/13)%1;
     const mt=1-t;
-    const x=mt*mt*mt*(from.x+28)+3*mt*mt*t*c1x+3*mt*t*t*c2x+t*t*t*(to.x-28);
-    const y=mt*mt*mt*from.y+3*mt*mt*t*c1y+3*mt*t*t*c2y+t*t*t*to.y;
-    ctx.beginPath(); ctx.arc(x,y,degraded?4.6:3.8,0,Math.PI*2); ctx.fillStyle=degraded?'#fecdd3':'#dbeafe'; ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
+    const px=mt*mt*mt*startX+3*mt*mt*t*c1x+3*mt*t*t*c2x+t*t*t*endX;
+    const py=mt*mt*mt*startY+3*mt*mt*t*c1y+3*mt*t*t*c2y+t*t*t*endY;
+    ctx.beginPath(); ctx.arc(px,py,isError?5:4,0,Math.PI*2);
+    ctx.fillStyle=isError?'#fecdd3':'#bfdbfe';
+    ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=10; ctx.fill(); ctx.shadowBlur=0;
 
-    // edge label positioned near the clean middle of the route
-    const lx=(from.x+to.x)/2, ly=(from.y+to.y)/2 - 12;
-    const label=e.label||`${fmt(e.calls)} calls`;
-    ctx.font='800 10px DM Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    const safeLabel=label.length>42?label.slice(0,39)+'…':label;
-    const tw=ctx.measureText(safeLabel).width+16;
-    ctx.fillStyle=isDark?'rgba(2,6,23,.80)':'rgba(255,255,255,.92)'; roundRect(ctx,lx-tw/2,ly-11,tw,22,11); ctx.fill();
-    ctx.strokeStyle=isDark?'rgba(148,163,184,.18)':'rgba(37,99,235,.15)'; ctx.stroke();
-    ctx.fillStyle=degraded?'#fb7185':(isDark?'#dbeafe':'#1e40af'); ctx.fillText(safeLabel,lx,ly);
+    // Edge call-count label at midpoint
+    const lx=(startX+endX)/2, ly=(startY+endY)/2-14;
+    const label=`${fmt(e.calls)} calls${e.errorRate>0?' ⚠':''}`;
+    ctx.font='700 10px Plus Jakarta Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const tw=ctx.measureText(label).width+14;
+    ctx.fillStyle=isDark?'rgba(8,17,31,.88)':'rgba(255,255,255,.94)';
+    roundRect(ctx, lx-tw/2, ly-10, tw, 20, 10); ctx.fill();
+    ctx.strokeStyle=isDark?'rgba(148,163,184,.15)':'rgba(37,99,235,.12)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle=isError?'#fb7185':(isDark?'#93c5fd':'#1e40af');
+    ctx.fillText(label, lx, ly);
     ctx.restore();
   });
 
+  // ── Draw nodes ──
   topoNodes.forEach(node=>{
     const statusColor=node.isExternal?topoColors.external:(topoColors[node.status]||topoColors.unknown);
     const isSelected=topoSelected===node.id;
     const r=isSelected?28:23;
-    ctx.save(); ctx.translate(node.x,node.y);
-    const alpha=node.orphan ? .58 : 1;
-    ctx.globalAlpha=alpha;
+    ctx.save(); ctx.translate(node.x, node.y);
+    ctx.globalAlpha=node.orphan?.55:1;
+
+    // Pulse ring for selected/error/degraded nodes
     if(isSelected||node.status==='degraded'||node.status==='down'){
-      const pulse=5+Math.sin(now/360)*2;
-      ctx.beginPath(); ctx.arc(0,0,r+pulse,0,Math.PI*2); ctx.strokeStyle=statusColor; ctx.lineWidth=2; ctx.globalAlpha=.28; ctx.stroke(); ctx.globalAlpha=alpha;
+      const pulse=5+Math.sin(now/380)*2.5;
+      ctx.beginPath(); ctx.arc(0,0,r+pulse,0,Math.PI*2);
+      ctx.strokeStyle=statusColor; ctx.lineWidth=isSelected?2.5:1.5;
+      ctx.globalAlpha=(node.orphan?.35:.22); ctx.stroke();
+      ctx.globalAlpha=node.orphan?.55:1;
     }
-    ctx.shadowColor=statusColor; ctx.shadowBlur=isSelected?22:11;
-    const grad=ctx.createRadialGradient(-7,-8,3,0,0,r);
-    grad.addColorStop(0,isDark?'#1e293b':'#ffffff'); grad.addColorStop(1,isDark?'#020617':'#eff6ff');
-    ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill(); ctx.lineWidth=isSelected?3:2; ctx.strokeStyle=statusColor; ctx.stroke(); ctx.shadowBlur=0;
-    ctx.beginPath(); ctx.arc(r*.62,-r*.62,4.6,0,Math.PI*2); ctx.fillStyle=statusColor; ctx.fill();
-    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12.5:11}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(shortNodeLabel(node.label),0,-2);
-    ctx.font='700 9px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} · ${fmtMs(node.p95)}`,0,r+14);
+
+    // Node body
+    ctx.shadowColor=statusColor; ctx.shadowBlur=isSelected?24:12;
+    const grad=ctx.createRadialGradient(-6,-7,2,0,0,r);
+    grad.addColorStop(0, isDark?'#1e293b':'#ffffff');
+    grad.addColorStop(1, isDark?'#020617':'#eff6ff');
+    ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+    ctx.fillStyle=grad; ctx.fill();
+    ctx.lineWidth=isSelected?3:2; ctx.strokeStyle=statusColor; ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Status dot (top-right quadrant)
+    ctx.beginPath(); ctx.arc(r*.65,-r*.65,5,0,Math.PI*2);
+    ctx.fillStyle=statusColor; ctx.fill();
+
+    // Node label inside circle
+    const labelText=shortNodeLabel(node.label);
+    ctx.fillStyle=isDark?'#e2e8f0':'#0f172a';
+    ctx.font=`700 ${isSelected?12:10.5}px Plus Jakarta Sans,system-ui`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(labelText, 0, -1);
+
+    // Calls + latency below node
+    ctx.font=`600 8.5px Plus Jakarta Sans,system-ui`;
+    ctx.fillStyle=node.errorRate>1?'#fb7185':(isDark?'#93c5fd':'#3b82f6');
+    ctx.fillText(`${fmt(node.calls)} · ${fmtMs(node.p95)}`, 0, r+15);
+
     ctx.restore();
   });
+
   topoAnimFrame=requestAnimationFrame(drawTopo);
 }
 
+// ── Smarter node label abbreviation ──
 function shortNodeLabel(v){
-  let s=String(v||'').replace(/^https?:\/\//,'').replace(/^endpoint::/,'').replace(/^dependency::/,'');
-  // Keep leading slash for paths, strip for hostnames
-  s=s.replace(/^(GET|POST|PUT|PATCH|DELETE|ANY)\s+/,'$1 ');
-  // If it's a hostname/external, abbreviate domain
-  if(!s.startsWith('/') && !s.match(/^[A-Z]+ \//) && s.includes('.')) {
-    const parts=s.split('.');
-    if(parts.length>=3) s=parts.slice(-2).join('.');
+  let s=String(v||'').trim()
+    .replace(/^https?:\/\//,'')
+    .replace(/^endpoint::/,'')
+    .replace(/^dependency::/,'');
+
+  // External hostname: keep last 2 segments
+  if(!s.match(/^(GET|POST|PUT|PATCH|DELETE|ANY)\s/) && s.includes('.')){
+    const parts=s.split('.'); if(parts.length>=3) s=parts.slice(-2).join('.');
+    return s.length>22?s.slice(0,21)+'…':s;
   }
-  // Truncate long paths keeping method prefix
-  const match=s.match(/^([A-Z]+ )(.+)/);
-  if(match){
-    const method=match[1], path=match[2];
-    return path.length>14 ? method+path.slice(0,13)+'…' : s;
+  // HTTP method + path: keep method, abbreviate path
+  const m=s.match(/^([A-Z]+)\s+(.*)/);
+  if(m){
+    const method=m[1], path=m[2];
+    const pathShort=path.length>14?path.slice(0,13)+'…':path;
+    return `${method} ${pathShort}`;
   }
+  // Plain service name
   return s.length>20?s.slice(0,19)+'…':s;
 }
-function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+// ── Init topology ──
 let _topoResizeObserver=null;
 async function initTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
   if(topoAnimFrame) cancelAnimationFrame(topoAnimFrame);
-  // Use ResizeObserver for stable canvas resize — NOT inside RAF
+
+  // ResizeObserver for stable canvas resize — NOT inside RAF
   if(_topoResizeObserver) _topoResizeObserver.disconnect();
-  _topoResizeObserver = new ResizeObserver(()=>{
-    // Only relayout, never resize canvas width/height here (done in syncTopoCanvas)
-    if(state.page==='topology') layoutTopo(canvas);
+  _topoResizeObserver=new ResizeObserver(()=>{
+    if(state.page==='topology'){ syncTopoCanvas(canvas); layoutTopo(canvas); }
   });
   _topoResizeObserver.observe(canvas);
+
   await buildTopoFromLogs(false);
-  syncTopoCanvas(canvas);
-  layoutTopo(canvas);
+
+  // If arriving from "View Topology" for a specific API, scope to it
   if(state.topoHighlight){
-    const match=topoNodes.find(n=>n.id===state.topoHighlight||n.label===state.topoHighlight);
-    if(match){topoSelected=match.id;showTopoDetail(match);} state.topoHighlight=null;
+    const apiName=state.topoHighlight;
+    state.topoHighlight=null;
+    // Check if it's an API name (not an endpoint label)
+    const matchingApi=topoAllNodes.find(n=>n.id===apiName||n.label===apiName||
+      n.id.startsWith(apiName+':')||n.service===apiName);
+    if(matchingApi){
+      topoSelected=matchingApi.id;
+      scopeTopoToApi(apiName);
+    } else {
+      scopeTopoToApi(apiName); // try anyway
+    }
+  } else {
+    syncTopoCanvas(canvas); layoutTopo(canvas);
   }
+
   drawTopo();
-  canvas.onclick=e=>{
-    const rect=canvas.getBoundingClientRect(); const x=e.clientX-rect.left,y=e.clientY-rect.top;
-    const hit=topoNodes.find(n=>Math.hypot(n.x-x,n.y-y)<32);
-    if(hit){topoSelected=hit.id;showTopoDetail(hit);} else {topoSelected=null;if($('topoDetail'))$('topoDetail').hidden=true;}
-  };
   renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
-  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{topoLoadedKey=''; if(topoAnimFrame){cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null;} await buildTopoFromLogs(true);layoutTopo(canvas);renderDepMatrix();renderCriticalPaths();renderTopoRcaPanel();drawTopo();};
+
+  canvas.onclick=e=>{
+    const rect=canvas.getBoundingClientRect();
+    const x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const hit=topoNodes.find(n=>Math.hypot(n.x-x,n.y-y)<(n.id===topoSelected?30:26));
+    if(hit){ topoSelected=hit.id; showTopoDetail(hit); }
+    else { topoSelected=null; if($('topoDetail')) $('topoDetail').hidden=true; }
+  };
+
+  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{
+    topoLoadedKey='';
+    if(topoAnimFrame){ cancelAnimationFrame(topoAnimFrame); topoAnimFrame=null; }
+    await buildTopoFromLogs(true);
+    if(topoScopeApi) applyTopoScope(topoScopeApi);
+    const canvas=$('topoCanvas'); if(canvas){ syncTopoCanvas(canvas); layoutTopo(canvas); }
+    renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
+    drawTopo();
+  };
 }
 
+// ── Node detail panel ──
 function showTopoDetail(node){
   const el=$('topoDetail'); if(!el) return; el.hidden=false;
+  const badge=$('topoDetailBadge');
+  if(badge) badge.textContent=node.isExternal?'external':'endpoint';
   if($('topoDetailName')) $('topoDetailName').textContent=node.label;
   const downstream=topoEdges.filter(e=>e.from===node.id).map(e=>topoNodes.find(n=>n.id===e.to)?.label).filter(Boolean);
   const upstream=topoEdges.filter(e=>e.to===node.id).map(e=>topoNodes.find(n=>n.id===e.from)?.label).filter(Boolean);
+  const statusColor=topoColors[node.status]||topoColors.unknown;
   if($('topoDetailBody')) $('topoDetailBody').innerHTML=`
     <div class="topo-kv-grid">
-      <div class="topo-kv"><small>Status</small><b style="color:${topoColors[node.status]||topoColors.unknown}">${esc(node.status)}</b></div>
-      <div class="topo-kv"><small>Error Rate</small><b>${node.errorRate.toFixed(2)}%</b></div>
+      <div class="topo-kv"><small>Status</small><b style="color:${statusColor}">${esc(node.status)}</b></div>
+      <div class="topo-kv"><small>Error Rate</small><b style="color:${node.errorRate>1?'#fb7185':'inherit'}">${node.errorRate.toFixed(2)}%</b></div>
       <div class="topo-kv"><small>P95 Latency</small><b>${fmtMs(node.p95)}</b></div>
       <div class="topo-kv"><small>Total Calls</small><b>${fmt(node.calls)}</b></div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px"><button class="secondary" id="topoLogsBtn">Open logs</button><button id="topoRunRcaBtn">Run RCA</button></div>
-    <div style="margin-top:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Upstream</div>${upstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
-      <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Downstream</div>${downstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="secondary" id="topoLogsBtn">View logs</button>
+      <button id="topoRunRcaBtn">Run AI RCA</button>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px">
+      <div>
+        <div style="font-weight:800;margin-bottom:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">← Upstream callers</div>
+        ${upstream.map(s=>`<div style="padding:6px 10px;border:1px solid var(--line);border-radius:10px;font-size:12px;margin-bottom:4px;font-weight:600">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None detected</div>'}
+      </div>
+      <div>
+        <div style="font-weight:800;margin-bottom:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">→ Downstream calls</div>
+        ${downstream.map(s=>`<div style="padding:6px 10px;border:1px solid var(--line);border-radius:10px;font-size:12px;margin-bottom:4px;font-weight:600">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None detected</div>'}
+      </div>
     </div>`;
-  setTimeout(()=>{if($('topoLogsBtn'))$('topoLogsBtn').onclick=()=>{setPage('logs'); if($('logQuery')) $('logQuery').value=node.label; searchLogs(1);}; if($('topoRunRcaBtn'))$('topoRunRcaBtn').onclick=()=>runTopologyRca(node);},0);
+  setTimeout(()=>{
+    if($('topoLogsBtn')) $('topoLogsBtn').onclick=()=>{ setPage('logs'); if($('logQuery')) $('logQuery').value=node.label; searchLogs(1); };
+    if($('topoRunRcaBtn')) $('topoRunRcaBtn').onclick=()=>runTopologyRca(node);
+  },0);
   renderTopoRcaPanel(node);
 }
 
 async function runTopologyRca(node){
-  const el=$('topoRcaPanel'); if(el) el.innerHTML='<div class="empty">Running RCA for selected topology node…</div>';
+  const el=$('topoRcaPanel'); if(el) el.innerHTML='<div class="empty">Running RCA for selected node…</div>';
   const related=topoEdges.filter(e=>e.from===node.id||e.to===node.id).sort((a,b)=>(b.errorRate-a.errorRate)||(b.p95-a.p95));
   const query=`Analyze topology node ${node.label}. Calls=${node.calls}, errorRate=${node.errorRate.toFixed(2)}%, p95=${node.p95}ms. Related edges: ${related.map(e=>`${e.from}->${e.to} calls=${e.calls} p95=${e.p95}ms err=${e.errorRate}% path=${e.label}`).join('; ')}`;
   try{
     const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});
-    if(el) el.innerHTML=`<div class="rca-action ${node.errorRate>1?'danger':node.p95>1500?'warn':'ok'}"><div><b>${esc(data.likely_root_cause||'Topology RCA')}</b><p>${esc(data.summary||'No summary')}</p><small>${esc(data.ai_provider||'local')} · ${esc(data.ai_model||'rule-engine')}</small></div></div>${(data.recommended_actions||data.recommendations||[]).map(a=>`<div class="rca-action"><div><b>Recommended action</b><p>${esc(a)}</p></div></div>`).join('')}`;
+    if(el) el.innerHTML=`<div class="rca-action ${node.errorRate>1?'danger':node.p95>1500?'warn':'ok'}"><div><b>${esc(data.likely_root_cause||'Topology RCA')}</b><p>${esc(data.summary||'No summary')}</p><small>${esc(data.ai_provider||'local')} · ${esc(data.ai_model||'rule-engine')}</small></div></div>${(data.recommended_actions||data.recommendations||[]).map(a=>`<div class="rca-action"><div><b>Action</b><p>${esc(a)}</p></div></div>`).join('')}`;
   }catch(e){ if(el) el.innerHTML=`<div class="rca-action danger"><div><b>RCA failed</b><p>${esc(e.message)}</p></div></div>`; }
 }
 
@@ -1598,7 +1850,7 @@ function renderTopoRcaPanel(node=null){
   const el=$('topoRcaPanel'); if(!el) return;
   if(!node){
     const worst=[...topoNodes].sort((a,b)=>(b.errorRate-a.errorRate)||(b.p95-a.p95))[0];
-    el.innerHTML=worst?`<div class="rca-action ${worst.errorRate>1?'danger':worst.p95>1500?'warn':'ok'}"><div><b>Most interesting node</b><p>${esc(worst.label)} · ${worst.errorRate.toFixed(2)}% errors · ${fmtMs(worst.p95)} p95</p></div><button class="secondary" id="quickTopoRca">Run RCA</button></div>`:'<div class="empty">No topology data yet.</div>';
+    el.innerHTML=worst?`<div class="rca-action ${worst.errorRate>1?'danger':worst.p95>1500?'warn':'ok'}"><div><b>Most critical node</b><p>${esc(worst.label)} · ${worst.errorRate.toFixed(2)}% errors · ${fmtMs(worst.p95)} p95</p></div><button class="secondary" id="quickTopoRca">Run RCA</button></div>`:'<div class="empty">No topology data yet.</div>';
     setTimeout(()=>{if($('quickTopoRca'))$('quickTopoRca').onclick=()=>runTopologyRca(worst);},0); return;
   }
   el.innerHTML=`<div class="rca-action ${node.errorRate>1?'danger':node.p95>1500?'warn':'ok'}"><div><b>${esc(node.label)}</b><p>${node.errorRate.toFixed(2)}% errors · ${fmtMs(node.p95)} p95 · ${fmt(node.calls)} calls</p></div><button id="quickTopoRca">Run RCA</button></div>`;
@@ -1607,24 +1859,36 @@ function renderTopoRcaPanel(node=null){
 
 function renderDepMatrix(){
   const el=$('depMatrix'); if(!el) return;
-  if(!topoEdges.length){el.innerHTML='<div class="empty">No dependency data yet. Upload logs with endpoint paths and downstream request messages.</div>';return;}
-  el.innerHTML=topoEdges.slice(0,30).map(e=>{
+  if(!topoEdges.length){ el.innerHTML='<div class="empty">No dependency data yet.</div>'; return; }
+  el.innerHTML=topoEdges.slice(0,20).map(e=>{
     const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to);
     if(!from||!to) return '';
-    if(!from||!to) return '';
-    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:var(--text)">${esc(to.label)}</span><span class="level INFO" style="font-size:10px">${fmt(e.calls)} calls · ${fmtMs(e.p95)}</span></div>`;
+    const isErr=e.errorRate>1;
+    return `<div class="dep-row">
+      <span class="dep-from">${esc(shortNodeLabel(from.label))}</span>
+      <span class="dep-arrow">→</span>
+      <span class="dep-to ${to.isExternal?'external':''}">${esc(shortNodeLabel(to.label))}</span>
+      <span class="dep-meta ${isErr?'err':''}">${fmt(e.calls)} calls${isErr?` · ${e.errorRate.toFixed(1)}% err`:''}</span>
+    </div>`;
   }).join('');
 }
+
 function renderCriticalPaths(){
   const el=$('criticalPaths'); if(!el) return;
   const paths=[...topoEdges].sort((a,b)=>((b.errorRate*1000)+(b.p95||0))-((a.errorRate*1000)+(a.p95||0))).slice(0,6);
-  if(!paths.length){el.innerHTML='<div class="empty">No request chains detected yet.</div>';return;}
-  el.innerHTML=paths.map(e=>{const from=topoNodes.find(n=>n.id===e.from);const to=topoNodes.find(n=>n.id===e.to);return `
-    <div class="critical-path-item">
-      <div><code>${esc(from?.label||e.from)} → ${esc(to?.label||e.to)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(e.label||'endpoint dependency')} · ${e.errorRate.toFixed(2)}% errors</div></div>
+  if(!paths.length){ el.innerHTML='<div class="empty">No request chains detected.</div>'; return; }
+  el.innerHTML=paths.map(e=>{
+    const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to);
+    return `<div class="critical-path-item">
+      <div>
+        <div class="cp-chain"><span>${esc(shortNodeLabel(from?.label||e.from))}</span><span class="cp-arrow">→</span><span>${esc(shortNodeLabel(to?.label||e.to))}</span></div>
+        <div class="cp-detail">${esc(e.label||'dependency')} · <span style="color:${e.errorRate>1?'#fb7185':'var(--muted)'}">${e.errorRate.toFixed(2)}% errors</span></div>
+      </div>
       <div class="cp-latency">${fmtMs(e.p95||e.avgLatency)}</div>
-    </div>`}).join('');
+    </div>`;
+  }).join('');
 }
+
 
 // ── EXTENDED NAV ICONS ──
 function hookNewPageNav(){

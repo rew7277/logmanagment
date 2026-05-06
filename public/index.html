@@ -160,35 +160,50 @@
 
       <!-- ── TOPOLOGY PAGE ── -->
       <section class="page" data-page="topology">
-        <div class="card topology-card">
-          <div class="section-head">
-            <div><h3>Service Topology</h3><span>Built from successful Flow Analytics traces</span></div>
-            <div style="display:flex;gap:10px;align-items:center">
-              <select id="topoFilter" style="height:40px;width:160px;font-size:13px;border-radius:12px">
-                <option value="all">All successful flows</option>
-                <option value="slow">Slow successful flows</option>
-              </select>
-              <button id="refreshTopoBtn" class="secondary">Refresh</button>
+        <!-- Scope header -->
+        <div class="topo-page-header">
+          <div class="topo-scope-bar">
+            <button class="topo-scope-back" id="topoBackBtn" hidden onclick="clearTopoScope()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+              All Services
+            </button>
+            <div class="topo-scope-crumb" id="topoScopeCrumb">
+              <span class="topo-crumb-icon">&#9729;</span>
+              <span id="topoScopeLabel">Full service topology</span>
             </div>
           </div>
+          <div class="topo-header-controls">
+            <div class="topo-api-pills" id="topoApiPills"></div>
+            <button id="refreshTopoBtn" class="secondary topo-refresh-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M20.5 15a9 9 0 1 1-2.7-7.3L23 10"/></svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <!-- Main canvas card -->
+        <div class="card topology-card">
           <div class="topo-legend">
             <span class="topo-legend-item"><span class="topo-dot healthy"></span>Healthy</span>
             <span class="topo-legend-item"><span class="topo-dot degraded"></span>Degraded</span>
-            <span class="topo-legend-item"><span class="topo-dot down"></span>Down/Error</span>
-            <span class="topo-legend-item"><span class="topo-edge-sample normal"></span>Animated traffic</span>
+            <span class="topo-legend-item"><span class="topo-dot down"></span>Error</span>
+            <span class="topo-legend-item"><span class="topo-edge-sample normal"></span>Request flow &#8594;</span>
             <span class="topo-legend-item"><span class="topo-edge-sample error"></span>Error path</span>
           </div>
           <div id="topoMetricsOverlay" class="topo-metrics-overlay"></div>
           <canvas id="topoCanvas" class="topo-canvas"></canvas>
           <div class="topo-detail-panel" id="topoDetail" hidden>
-            <div class="topo-detail-head"><strong id="topoDetailName">Service</strong><button class="secondary" onclick="document.getElementById('topoDetail').hidden=true">✕</button></div>
+            <div class="topo-detail-head">
+              <div class="topo-detail-title"><span class="topo-detail-badge" id="topoDetailBadge">endpoint</span><strong id="topoDetailName">Service</strong></div>
+              <button class="secondary topo-close-btn" onclick="document.getElementById('topoDetail').hidden=true">&#x2715;</button>
+            </div>
             <div id="topoDetailBody"></div>
           </div>
         </div>
-        <div class="grid-2" style="margin-top:18px">
-          <div class="card"><div class="section-head"><h3>Service Dependencies</h3><span>Upstream / downstream call map</span></div><div id="depMatrix"></div></div>
-          <div class="card"><div class="section-head"><h3>Critical Paths</h3><span>Highest impact request chains</span></div><div id="criticalPaths"></div></div>
-          <div class="card"><div class="section-head"><h3>Topology RCA</h3><span>AI-ready failure context from selected node</span></div><div id="topoRcaPanel" class="topo-rca-panel"><div class="empty">Select a node and click “Run RCA” to inspect likely root cause.</div></div></div>
+        <!-- Bottom panels 3-col -->
+        <div class="topo-bottom-grid">
+          <div class="card topo-bottom-card"><div class="section-head"><h3>Request Flow</h3><span id="topoDepSubtitle">Upstream &#8594; Downstream</span></div><div id="depMatrix"></div></div>
+          <div class="card topo-bottom-card"><div class="section-head"><h3>Critical Paths</h3><span>Highest-impact chains</span></div><div id="criticalPaths"></div></div>
+          <div class="card topo-bottom-card"><div class="section-head"><h3>AI Root Cause</h3><span>From selected node</span></div><div id="topoRcaPanel" class="topo-rca-panel"><div class="empty">Select a node and click "Run RCA".</div></div></div>
         </div>
       </section>
 
