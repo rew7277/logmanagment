@@ -59,7 +59,7 @@
         <div class="card api-endpoints-card">
           <div class="section-head">
             <div><h3>APIs &amp; Endpoints</h3><span>Click an API to expand its endpoints</span></div>
-            <div class="ae-actions"><button id="addApiBtn" class="secondary" type="button">+ Add API / Endpoint</button><button class="secondary" type="button" data-page-link="topology" title="View discovered service flow map">🔗 Service Topology</button><div class="ae-search-wrap">
+            <div class="ae-actions"><button id="addApiBtn" class="secondary" type="button">+ Add API / Endpoint</button><div class="ae-search-wrap">
               <span class="ae-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
               <input id="aeSearch" class="ae-search-input" placeholder="Filter by API name or endpoint path…" autocomplete="off" />
             </div></div>
@@ -168,9 +168,10 @@
             <span class="topo-legend-item"><span class="topo-dot healthy"></span>Healthy</span>
             <span class="topo-legend-item"><span class="topo-dot degraded"></span>Degraded</span>
             <span class="topo-legend-item"><span class="topo-dot down"></span>Down/Error</span>
-            <span class="topo-legend-item"><span class="topo-edge-sample normal"></span>Normal flow</span>
+            <span class="topo-legend-item"><span class="topo-edge-sample normal"></span>Animated traffic</span>
             <span class="topo-legend-item"><span class="topo-edge-sample error"></span>Error path</span>
           </div>
+          <div id="topoMetricsOverlay" class="topo-metrics-overlay"></div>
           <canvas id="topoCanvas" class="topo-canvas"></canvas>
           <div class="topo-detail-panel" id="topoDetail" hidden>
             <div class="topo-detail-head"><strong id="topoDetailName">Service</strong><button class="secondary" onclick="document.getElementById('topoDetail').hidden=true">✕</button></div>
@@ -180,6 +181,7 @@
         <div class="grid-2" style="margin-top:18px">
           <div class="card"><div class="section-head"><h3>Service Dependencies</h3><span>Upstream / downstream call map</span></div><div id="depMatrix"></div></div>
           <div class="card"><div class="section-head"><h3>Critical Paths</h3><span>Highest impact request chains</span></div><div id="criticalPaths"></div></div>
+          <div class="card"><div class="section-head"><h3>Topology RCA</h3><span>AI-ready failure context from selected node</span></div><div id="topoRcaPanel" class="topo-rca-panel"><div class="empty">Select a node and click “Run RCA” to inspect likely root cause.</div></div></div>
         </div>
       </section>
 

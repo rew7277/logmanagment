@@ -985,115 +985,210 @@ export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
 
 export async function getTopology(workspaceSlug, environmentName) {
   const env = await getEnvironment(workspaceSlug, environmentName);
-  if (!env) return { nodes: [], edges: [] };
+  if (!env) return { nodes: [], edges: [], summary: {} };
 
   const isSuccessStatus = (status) => {
     const n = Number(status || 0);
-    return n >= 200 && n < 400;
+    return !status || (n >= 200 && n < 400);
   };
 
   if (!hasDatabase) {
-    const byTrace = new Map();
-    for (const l of fallback.logs.filter(x => x.environment_name === environmentName)) {
-      const raw = l.raw || {};
-      const traceId = l.trace_id || raw.trace_id || raw.event_id || raw.correlation_id || raw.transaction_id;
-      const status = raw.http_status || raw.status_code || raw.analytics?.http_status;
-      if (!traceId || ['ERROR','FATAL'].includes(String(l.severity || '').toUpperCase()) || (status && !isSuccessStatus(status))) continue;
-      const service = l.service_name || raw.service_name || raw.service || raw.app_name || raw.analytics?.application_name;
-      if (!service) continue;
-      const item = { service_name: String(service), latency_ms: Number(raw.latency_ms || raw.response_time_ms || raw.analytics?.latency_ms || 0), flow_name: raw.flow_name || raw.analytics?.flow_name || raw.payload?.entry?.FlowName || null, path: l.path || raw.path || raw.endpoint || null };
-      if (!byTrace.has(traceId)) byTrace.set(traceId, []);
-      byTrace.get(traceId).push(item);
-    }
-    return buildTopologyResponse([...byTrace.values()].flat(), byTrace);
+    const rows = fallback.logs
+      .filter(x => x.environment_name === environmentName)
+      .map(l => {
+        const raw = l.raw || {};
+        return {
+          trace_id: l.trace_id || raw.trace_id || raw.event_id || raw.correlation_id || raw.transaction_id || `trace-${l.id || Math.random()}`,
+          timestamp: l.timestamp || raw.timestamp || raw.time || new Date().toISOString(),
+          severity: l.severity || raw.severity || raw.level || 'INFO',
+          message: l.message || raw.message || '',
+          service_name: l.service_name || raw.service_name || raw.service || raw.app_name || raw.analytics?.application_name || 'observed-api',
+          method: l.method || raw.method || raw.http_method || raw.analytics?.method || '',
+          path: l.path || raw.path || raw.endpoint || raw.request_uri || raw.analytics?.request_uri || '',
+          latency_ms: Number(raw.latency_ms || raw.response_time_ms || raw.duration_ms || raw.analytics?.latency_ms || 0),
+          http_status: raw.http_status || raw.status_code || raw.analytics?.http_status || null,
+          raw
+        };
+      })
+      .filter(r => r.path || r.service_name);
+    return buildTopologyResponse(rows);
   }
 
   const result = await query(
-    `WITH successful_logs AS (
-       SELECT le.trace_id,
-              le.timestamp,
-              COALESCE(NULLIF(s.name,''), NULLIF(le.raw->>'service_name',''), NULLIF(le.raw->>'service',''), NULLIF(le.raw->'analytics'->>'application_name','')) AS service_name,
-              COALESCE(NULLIF(le.raw->>'flow_name',''), NULLIF(le.raw->'analytics'->>'flow_name',''), NULLIF(le.raw->'payload'->'entry'->>'FlowName','')) AS flow_name,
-              COALESCE(ep.path, NULLIF(le.raw->>'path',''), NULLIF(le.raw->>'endpoint',''), NULLIF(le.raw->'analytics'->>'request_uri','')) AS path,
-              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END,
-                       CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END,
-                       CASE WHEN (le.raw->>'duration_ms') ~ '^[0-9]+$' THEN (le.raw->>'duration_ms')::int END, 0) AS latency_ms,
-              COALESCE(NULLIF(le.raw->>'http_status',''), NULLIF(le.raw->>'status_code',''), NULLIF(le.raw->'analytics'->>'http_status','')) AS http_status
-        FROM log_events le
-        LEFT JOIN services s ON s.id=le.service_id
-        LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
-        WHERE le.environment_id=$1
-          AND le.trace_id IS NOT NULL
-          AND le.severity NOT IN ('ERROR','FATAL')
-          AND COALESCE(NULLIF(s.name,''), NULLIF(le.raw->>'service_name',''), NULLIF(le.raw->>'service',''), NULLIF(le.raw->'analytics'->>'application_name','')) IS NOT NULL
-     )
-     SELECT * FROM successful_logs
-     WHERE http_status IS NULL OR http_status ~ '^[0-9]+$' AND http_status::int BETWEEN 200 AND 399
-     ORDER BY trace_id, timestamp ASC
-     LIMIT 5000`, [env.id]
+    `SELECT le.trace_id,
+            le.timestamp,
+            le.severity,
+            le.message,
+            le.raw,
+            COALESCE(NULLIF(s.name,''), NULLIF(le.raw->>'service_name',''), NULLIF(le.raw->>'service',''), NULLIF(le.raw->'analytics'->>'application_name',''), 'observed-api') AS service_name,
+            COALESCE(NULLIF(ep.method,''), NULLIF(le.raw->>'method',''), NULLIF(le.raw->>'http_method',''), NULLIF(le.raw->'analytics'->>'method','')) AS method,
+            COALESCE(NULLIF(ep.path,''), NULLIF(le.raw->>'path',''), NULLIF(le.raw->>'endpoint',''), NULLIF(le.raw->>'request_uri',''), NULLIF(le.raw->'analytics'->>'request_uri','')) AS path,
+            COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END,
+                     CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END,
+                     CASE WHEN (le.raw->>'duration_ms') ~ '^[0-9]+$' THEN (le.raw->>'duration_ms')::int END,
+                     CASE WHEN (le.raw->>'response_time_ms') ~ '^[0-9]+$' THEN (le.raw->>'response_time_ms')::int END, 0) AS latency_ms,
+            COALESCE(NULLIF(le.raw->>'http_status',''), NULLIF(le.raw->>'status_code',''), NULLIF(le.raw->'analytics'->>'http_status','')) AS http_status
+     FROM log_events le
+     LEFT JOIN services s ON s.id=le.service_id
+     LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+     WHERE le.environment_id=$1
+       AND (ep.path IS NOT NULL OR le.raw ? 'path' OR le.raw ? 'endpoint' OR le.raw ? 'request_uri' OR le.message ILIKE '%request to%' OR le.message ILIKE '%calling%api%' OR le.message ILIKE '%outbound call%')
+     ORDER BY COALESCE(le.trace_id, le.raw->>'correlation_id', le.raw->>'event_id', le.raw->>'transaction_id', le.id::text), le.timestamp ASC
+     LIMIT 8000`, [env.id]
   );
-  const byTrace = new Map();
-  for (const row of result.rows) {
-    if (!byTrace.has(row.trace_id)) byTrace.set(row.trace_id, []);
-    byTrace.get(row.trace_id).push(row);
-  }
-  return buildTopologyResponse(result.rows, byTrace);
+  return buildTopologyResponse(result.rows || []);
 }
 
-function buildTopologyResponse(rows, byTrace) {
+function buildTopologyResponse(rows) {
   const nodeMap = new Map();
   const edgeMap = new Map();
+  const byTrace = new Map();
   const clean = (v) => String(v || '').replace(/\.xml(:[0-9]+)?$/i, '').trim();
-  for (const r of rows) {
-    const name = clean(r.service_name);
-    if (!name) continue;
-    const node = nodeMap.get(name) || { id: name, label: name, calls: 0, latency: [], errors: 0 };
-    node.calls += 1;
-    if (Number(r.latency_ms) > 0) node.latency.push(Number(r.latency_ms));
-    nodeMap.set(name, node);
-  }
+  const normalizePath = (v) => {
+    let s = String(v || '').trim();
+    if (!s) return '';
+    try { const u = new URL(s); s = u.pathname || '/'; } catch {}
+    s = s.split('?')[0].replace(/\/+/g, '/');
+    return s.startsWith('/') ? s : `/${s}`;
+  };
+  const endpointLabel = (r) => {
+    const path = normalizePath(r.path || r.raw?.path || r.raw?.endpoint || r.raw?.request_uri || r.raw?.analytics?.request_uri);
+    const method = clean(r.method || r.raw?.method || r.raw?.http_method || r.raw?.analytics?.method || '').toUpperCase();
+    const svc = clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
+    if (path) return `${method || 'ANY'} ${path}`;
+    return svc;
+  };
+  const nodeId = (label, service='') => `${clean(service)||'api'}::${label}`;
+  const isError = (r) => {
+    const sev = String(r.severity || '').toUpperCase();
+    const status = Number(r.http_status || r.raw?.http_status || r.raw?.status_code || 0);
+    return ['ERROR','FATAL'].includes(sev) || (status >= 400);
+  };
+  const latency = (r) => Number(r.latency_ms || r.raw?.latency_ms || r.raw?.duration_ms || r.raw?.response_time_ms || r.raw?.analytics?.latency_ms || 0);
+  const traceIdOf = (r, i) => r.trace_id || r.raw?.trace_id || r.raw?.correlation_id || r.raw?.event_id || r.raw?.transaction_id || `single-${i}`;
+
+  const extractDownstreams = (message='') => {
+    const text = String(message || '');
+    const found = [];
+    const patterns = [
+      /(?:before\s+request\s+to|request\s+to|outbound\s+call\s+to|calling)\s+([^\s,;\]\)]+)/ig,
+      /https?:\/\/[^\s,;\]\)]+/ig,
+      /(?:GET|POST|PUT|PATCH|DELETE)\s+(\/[^\s,;\]\)]+)/ig
+    ];
+    for (const re of patterns) {
+      let m; while ((m = re.exec(text)) !== null) found.push(m[1] || m[0]);
+    }
+    return found.map(v => {
+      let raw = String(v || '').replace(/["'<>]/g,'').trim();
+      if (!raw) return null;
+      let label = raw;
+      try {
+        const u = new URL(raw);
+        label = `${u.hostname}${u.pathname && u.pathname !== '/' ? u.pathname : ''}`;
+      } catch {
+        label = raw.replace(/\s+api$/i,' API');
+      }
+      label = label.replace(/[.,;:]$/,'');
+      // Avoid creating nodes for internal Mule flow names; keep URL/path/API endpoints only.
+      if (!/^https?:/i.test(raw) && !raw.startsWith('/') && !/api|service|endpoint|salesforce|secops|pdf|payment|bank|host/i.test(label)) return null;
+      return label;
+    }).filter(Boolean).slice(0,4);
+  };
+
+  rows.forEach((r,i) => {
+    const tid = traceIdOf(r,i);
+    if (!byTrace.has(tid)) byTrace.set(tid, []);
+    byTrace.get(tid).push(r);
+  });
+
+  const ensureNode = (id, label, extra={}) => {
+    const n = nodeMap.get(id) || { id, label, type:'endpoint', calls:0, errors:0, latency:[], ...extra };
+    n.calls += extra.bump === false ? 0 : 1;
+    if (extra.error) n.errors += 1;
+    if (extra.latency_ms > 0) n.latency.push(Number(extra.latency_ms));
+    n.type = extra.type || n.type;
+    n.is_external = extra.is_external || n.is_external || false;
+    nodeMap.set(id,n);
+    return n;
+  };
+  const addEdge = (from, to, label='', r={}) => {
+    if (!from || !to || from === to) return;
+    const key = `${from}->${to}:${label}`;
+    const e = edgeMap.get(key) || { from, to, label, calls:0, errors:0, latency:[], samples:[] };
+    e.calls += 1;
+    if (isError(r)) e.errors += 1;
+    const ms = latency(r); if (ms > 0) e.latency.push(ms);
+    if (r.message && e.samples.length < 3) e.samples.push(String(r.message).slice(0,180));
+    edgeMap.set(key,e);
+  };
+
   for (const events of byTrace.values()) {
-    const ordered = events.map(e => ({ ...e, service_name: clean(e.service_name) })).filter(e => e.service_name);
-    const seen = [];
-    for (const e of ordered) if (seen[seen.length - 1] !== e.service_name) seen.push(e.service_name);
-    for (let i = 0; i < seen.length - 1; i++) {
-      const from = seen[i], to = seen[i + 1];
-      const key = `${from}->${to}`;
-      const edge = edgeMap.get(key) || { from, to, calls: 0, latency: [], flowNames: new Map(), paths: new Map() };
-      edge.calls += 1;
-      const step = ordered.find(x => x.service_name === to) || ordered[i + 1] || {};
-      if (Number(step.latency_ms) > 0) edge.latency.push(Number(step.latency_ms));
-      if (step.flow_name) edge.flowNames.set(step.flow_name, (edge.flowNames.get(step.flow_name) || 0) + 1);
-      if (step.path) edge.paths.set(step.path, (edge.paths.get(step.path) || 0) + 1);
-      edgeMap.set(key, edge);
+    const ordered = [...events].sort((a,b)=>new Date(a.timestamp||0)-new Date(b.timestamp||0));
+    let prevEndpointId = null;
+    for (const r of ordered) {
+      const label = endpointLabel(r);
+      const svc = clean(r.service_name || r.raw?.service_name || r.raw?.service || 'observed-api');
+      const id = nodeId(label, svc);
+      ensureNode(id, label, { service_name: svc, type:'endpoint', error:isError(r), latency_ms:latency(r) });
+      if (prevEndpointId && prevEndpointId !== id) addEdge(prevEndpointId, id, label, r);
+      const downstreams = extractDownstreams(r.message || r.raw?.message || '');
+      for (const d of downstreams) {
+        const did = `external::${d}`;
+        ensureNode(did, d, { type:'external', is_external:true, bump:false });
+        addEdge(id, did, normalizePath(d) || d, r);
+      }
+      prevEndpointId = id;
     }
   }
+
   const percentile = (arr, p) => {
-    const a = [...arr].sort((x,y)=>x-y);
+    const a = [...arr].filter(x=>Number.isFinite(x)).sort((x,y)=>x-y);
     if (!a.length) return 0;
-    return Math.round(a[Math.min(a.length - 1, Math.floor((p / 100) * a.length))]);
+    return Math.round(a[Math.min(a.length - 1, Math.floor((p / 100) * (a.length - 1)))]);
   };
-  const topKey = (m) => [...m.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0] || null;
+  const avg = (arr) => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : 0;
+  const nodes = [...nodeMap.values()].map(n => {
+    const er = n.calls ? (n.errors / n.calls) * 100 : 0;
+    const p95 = percentile(n.latency,95);
+    return {
+      id:n.id,
+      label:n.label,
+      type:n.type,
+      is_external:!!n.is_external,
+      calls:n.calls,
+      error_rate:Number(er.toFixed(2)),
+      success_rate:Number((100-er).toFixed(2)),
+      avg_latency_ms:avg(n.latency),
+      p95_latency_ms:p95,
+      status: er >= 5 ? 'down' : (er > 0 || p95 > 1500 ? 'degraded' : 'healthy')
+    };
+  });
+  const edges = [...edgeMap.values()].map(e => {
+    const er = e.calls ? (e.errors / e.calls) * 100 : 0;
+    return {
+      from:e.from,
+      to:e.to,
+      calls:e.calls,
+      error_rate:Number(er.toFixed(2)),
+      avg_latency_ms:avg(e.latency),
+      p95_latency_ms:percentile(e.latency,95),
+      path:e.label,
+      label:e.label,
+      status: er > 0 ? 'error' : 'success',
+      samples:e.samples
+    };
+  }).sort((a,b)=>b.calls-a.calls);
+  const totalCalls = edges.reduce((a,e)=>a+e.calls,0) || nodes.reduce((a,n)=>a+n.calls,0);
+  const totalErrors = edges.reduce((a,e)=>a+Math.round(e.calls*e.error_rate/100),0);
   return {
-    nodes: [...nodeMap.values()].map(n => ({
-      id: n.id,
-      label: n.label,
-      calls: n.calls,
-      status: percentile(n.latency, 95) > 1500 ? 'degraded' : 'healthy',
-      error_rate: 0,
-      success_rate: 100,
-      p95_latency_ms: percentile(n.latency, 95)
-    })),
-    edges: [...edgeMap.values()].map(e => ({
-      from: e.from,
-      to: e.to,
-      calls: e.calls,
-      avg_latency_ms: e.latency.length ? Math.round(e.latency.reduce((a,b)=>a+b,0) / e.latency.length) : 0,
-      p95_latency_ms: percentile(e.latency, 95),
-      flow_name: topKey(e.flowNames),
-      path: topKey(e.paths),
-      status: 'success'
-    })).sort((a,b)=>b.calls-a.calls)
+    nodes,
+    edges,
+    summary: {
+      total_calls: totalCalls,
+      dependencies: edges.length,
+      error_rate: totalCalls ? Number(((totalErrors/totalCalls)*100).toFixed(2)) : 0,
+      avg_latency_ms: avg(edges.map(e=>e.avg_latency_ms).filter(Boolean))
+    }
   };
 }
 

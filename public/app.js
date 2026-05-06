@@ -1304,57 +1304,101 @@ function createApproval(title,description){
 }
 
 // ── TOPOLOGY ──
-let topoNodes=[],topoEdges=[],topoAnimFrame=null,topoSelected=null;
-const topoColors={healthy:'#10b981',degraded:'#f59e0b',down:'#f43f5e',unknown:'#6b7280'};
+let topoNodes=[],topoEdges=[],topoAnimFrame=null,topoSelected=null,topoLoadedKey='';
+const topoColors={healthy:'#10b981',degraded:'#f59e0b',down:'#f43f5e',unknown:'#6b7280',external:'#a78bfa'};
 
-async function loadTopologyData(){
-  const payload=await api(endpoint('/topology'));
+function normalizeTopoPayload(payload){
   const nodes=(payload.nodes||[]).map((n,i)=>({
-    id:n.id||n.service_name||`svc-${i}`,
-    label:n.label||n.service_name||'Unknown service',
+    id:n.id||n.service_name||n.label||`svc-${i}`,
+    label:n.label||n.service_name||n.id||'Unknown endpoint',
+    type:n.type|| (n.is_external?'external':'endpoint'),
+    isExternal:!!(n.is_external||n.type==='external'),
     status:n.status||'healthy',
     calls:Number(n.calls||0),
     errorRate:Number(n.error_rate||0),
-    p95:Number(n.p95_latency_ms||0),
     successRate:Number(n.success_rate||100),
-    x:0,y:0,vx:0,vy:0
+    p95:Number(n.p95_latency_ms||0),
+    avgLatency:Number(n.avg_latency_ms||0),
+    x:0,y:0
   }));
+  const ids=new Set(nodes.map(n=>n.id));
   const edges=(payload.edges||[]).map(e=>({
-    from:e.from,
-    to:e.to,
-    weight:Math.max(1,Math.min(6,Math.round(Number(e.calls||1)/10)+1)),
-    error:false,
-    calls:Number(e.calls||0),
+    from:e.from||e.source,
+    to:e.to||e.target,
+    label:e.path||e.endpoint_path||e.label||'',
+    calls:Number(e.calls||1),
+    errorRate:Number(e.error_rate||0),
     avgLatency:Number(e.avg_latency_ms||0),
     p95:Number(e.p95_latency_ms||0),
-    flowName:e.flow_name||'',
-    path:e.path||''
-  })).filter(e=>e.from&&e.to&&e.from!==e.to);
-  topoNodes=nodes; topoEdges=edges;
+    status:e.status||'success',
+    samples:e.samples||[]
+  })).filter(e=>e.from&&e.to&&e.from!==e.to&&ids.has(e.from)&&ids.has(e.to));
+  return {nodes,edges,summary:payload.summary||{}};
 }
 
-async function buildTopoFromLogs(){
+async function loadTopologyData(force=false){
+  const key=`${state.workspace}:${state.environment}`;
+  if(!force && topoLoadedKey===key && topoNodes.length) return;
+  const payload=await api(endpoint('/topology'));
+  const data=normalizeTopoPayload(payload);
+  topoNodes=data.nodes; topoEdges=data.edges; topoLoadedKey=key;
+  renderTopoMetrics(data.summary);
+}
+
+function renderTopoMetrics(summary={}){
+  const el=$('topoMetricsOverlay'); if(!el) return;
+  const totalCalls=summary.total_calls ?? topoEdges.reduce((a,e)=>a+e.calls,0);
+  const avgLatency=summary.avg_latency_ms ?? Math.round(topoEdges.reduce((a,e)=>a+(e.avgLatency||0),0)/Math.max(1,topoEdges.length));
+  const errorRate=summary.error_rate ?? (topoNodes.reduce((a,n)=>a+n.errorRate,0)/Math.max(1,topoNodes.length));
+  const deps=summary.dependencies ?? topoEdges.length;
+  el.innerHTML=`
+    <div class="topo-metric"><small>Observed endpoints</small><b>${fmt(topoNodes.filter(n=>!n.isExternal).length)}</b></div>
+    <div class="topo-metric"><small>Dependencies</small><b>${fmt(deps)}</b></div>
+    <div class="topo-metric"><small>Traffic</small><b>${fmt(totalCalls)}</b></div>
+    <div class="topo-metric"><small>Avg latency</small><b>${fmtMs(avgLatency)}</b></div>`;
+}
+
+async function buildTopoFromLogs(force=false){
   try{
-    await loadTopologyData();
-    setText('topoSourceText', topoEdges.length ? 'Successful Flow Analytics data' : 'No successful flow data yet');
+    await loadTopologyData(force);
+    setText('topoSourceText', topoEdges.length ? 'Endpoint traffic + downstream calls' : 'No endpoint dependency data yet');
   }catch(e){
-    topoNodes=[]; topoEdges=[];
+    topoNodes=[]; topoEdges=[]; topoLoadedKey='';
     toast(`Topology unavailable: ${e.message}`,'error');
   }
 }
+
 function layoutTopo(canvas){
-  const W=canvas.width,H=canvas.height;
-  const n=topoNodes.length; if(!n) return;
-  // Circular layout as starting point
-  topoNodes.forEach((node,i)=>{
-    const angle=(2*Math.PI*i/n)-Math.PI/2;
-    const r=Math.min(W,H)*0.34;
-    node.x=W/2+r*Math.cos(angle);
-    node.y=H/2+r*Math.sin(angle);
-    if(n<=1){node.x=W/2;node.y=H/2;}
+  const rect=canvas.getBoundingClientRect();
+  const W=rect.width||canvas.width,H=rect.height||canvas.height;
+  if(!topoNodes.length) return;
+  const incoming=new Map(), outgoing=new Map();
+  topoNodes.forEach(n=>{incoming.set(n.id,0);outgoing.set(n.id,[]);});
+  topoEdges.forEach(e=>{incoming.set(e.to,(incoming.get(e.to)||0)+1); outgoing.get(e.from)?.push(e.to);});
+  const roots=topoNodes.filter(n=>(incoming.get(n.id)||0)===0 && !n.isExternal);
+  const start=roots.length?roots:topoNodes.filter(n=>!n.isExternal).slice(0,1);
+  const level=new Map();
+  const q=start.map(n=>{level.set(n.id,0);return n.id;});
+  while(q.length){
+    const id=q.shift(); const next=(level.get(id)||0)+1;
+    (outgoing.get(id)||[]).forEach(to=>{ if(!level.has(to)||level.get(to)<next){level.set(to,next);q.push(to);} });
+  }
+  topoNodes.forEach(n=>{ if(!level.has(n.id)) level.set(n.id,n.isExternal?2:0); });
+  const groups={};
+  topoNodes.forEach(n=>{const l=level.get(n.id)||0;(groups[l]||(groups[l]=[])).push(n);});
+  const levels=Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  const marginX=85, marginY=70;
+  const usableW=Math.max(280,W-marginX*2);
+  const stepX=levels.length>1?usableW/(levels.length-1):0;
+  levels.forEach((lvl,li)=>{
+    const arr=groups[lvl].sort((a,b)=>(b.calls||0)-(a.calls||0));
+    const stepY=Math.min(135, Math.max(74,(H-marginY*2)/Math.max(1,arr.length-1||1)));
+    const blockH=stepY*(arr.length-1);
+    arr.forEach((node,i)=>{
+      node.x=marginX + li*stepX;
+      node.y=Math.max(55, Math.min(H-45, H/2 - blockH/2 + i*stepY));
+    });
   });
-  // Override first node to center (gateway pattern)
-  if(n>=3){topoNodes[0].x=W/2;topoNodes[0].y=H/2;}
 }
 
 function drawTopo(){
@@ -1362,166 +1406,150 @@ function drawTopo(){
   const ctx=canvas.getContext('2d');
   const dpr=window.devicePixelRatio||1;
   const rect=canvas.getBoundingClientRect();
-  if(canvas.width!==rect.width*dpr||canvas.height!==rect.height*dpr){
-    canvas.width=rect.width*dpr; canvas.height=rect.height*dpr;
-    ctx.scale(dpr,dpr);
+  if(canvas.width!==Math.round(rect.width*dpr)||canvas.height!==Math.round(rect.height*dpr)){
+    canvas.width=Math.round(rect.width*dpr); canvas.height=Math.round(rect.height*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
     layoutTopo(canvas);
   }
   const W=rect.width,H=rect.height;
   ctx.clearRect(0,0,W,H);
   const isDark=document.documentElement.classList.contains('dark');
-  // Edges
+  if(!topoNodes.length){ctx.fillStyle=isDark?'#94a3b8':'#64748b';ctx.font='700 14px DM Sans,system-ui';ctx.textAlign='center';ctx.fillText('No topology yet. Upload logs with endpoint paths and downstream request messages.',W/2,H/2);return;}
+  const now=performance.now();
   topoEdges.forEach(e=>{
-    const from=topoNodes.find(n=>n.id===e.from);
-    const to=topoNodes.find(n=>n.id===e.to);
-    if(!from||!to) return;
+    const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to); if(!from||!to) return;
+    const degraded=e.errorRate>1||e.status==='error';
+    const cx=(from.x+to.x)/2, cy=(from.y+to.y)/2-28;
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(from.x,from.y);
-    // Bezier curve
-    const mx=(from.x+to.x)/2,my=(from.y+to.y)/2-30;
-    ctx.quadraticCurveTo(mx,my,to.x,to.y);
+    ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.quadraticCurveTo(cx,cy,to.x,to.y);
     const grad=ctx.createLinearGradient(from.x,from.y,to.x,to.y);
-    if(e.error){grad.addColorStop(0,'rgba(244,63,94,.6)');grad.addColorStop(1,'rgba(239,68,68,.9)');}
-    else{grad.addColorStop(0,'rgba(59,130,246,.5)');grad.addColorStop(1,'rgba(6,182,212,.7)');}
-    ctx.strokeStyle=grad;
-    ctx.lineWidth=e.weight||1;
-    ctx.setLineDash(e.error?[6,4]:[]);
-    ctx.stroke();
-    // Arrow
-    const dx=to.x-mx,dy=to.y-my;
-    const angle=Math.atan2(dy,dx);
-    const ax=to.x-18*Math.cos(angle),ay=to.y-18*Math.sin(angle);
-    ctx.beginPath();
-    ctx.moveTo(ax,ay);
-    ctx.lineTo(ax-8*Math.cos(angle-0.4),ay-8*Math.sin(angle-0.4));
-    ctx.lineTo(ax-8*Math.cos(angle+0.4),ay-8*Math.sin(angle+0.4));
-    ctx.closePath();
-    ctx.fillStyle=e.error?'#f43f5e':'#60a5fa';
-    ctx.fill();
+    grad.addColorStop(0,degraded?'rgba(244,63,94,.70)':'rgba(59,130,246,.50)');
+    grad.addColorStop(1,degraded?'rgba(251,113,133,.95)':'rgba(34,211,238,.85)');
+    ctx.strokeStyle=grad; ctx.lineWidth=Math.max(1.5,Math.min(7,1+Math.log10((e.calls||1)+1)*2));
+    ctx.setLineDash(degraded?[7,5]:[]); ctx.stroke(); ctx.setLineDash([]);
+    // arrow head
+    const angle=Math.atan2(to.y-cy,to.x-cx), ax=to.x-24*Math.cos(angle), ay=to.y-24*Math.sin(angle);
+    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax-9*Math.cos(angle-.42),ay-9*Math.sin(angle-.42)); ctx.lineTo(ax-9*Math.cos(angle+.42),ay-9*Math.sin(angle+.42)); ctx.closePath();
+    ctx.fillStyle=degraded?'#fb7185':'#38bdf8'; ctx.fill();
+    // animated traffic packet
+    const t=((now/1400)+(e.calls%13)/13)%1;
+    const x=(1-t)*(1-t)*from.x+2*(1-t)*t*cx+t*t*to.x;
+    const y=(1-t)*(1-t)*from.y+2*(1-t)*t*cy+t*t*to.y;
+    ctx.beginPath(); ctx.arc(x,y,degraded?4.5:3.5,0,Math.PI*2); ctx.fillStyle=degraded?'#fecdd3':'#bfdbfe'; ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
+    // edge label
+    const label=e.label||`${fmt(e.calls)} calls`;
+    ctx.font='800 10px DM Sans,system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const tw=ctx.measureText(label).width+16;
+    ctx.fillStyle=isDark?'rgba(2,6,23,.75)':'rgba(255,255,255,.88)'; roundRect(ctx,cx-tw/2,cy-12,tw,22,11); ctx.fill();
+    ctx.fillStyle=degraded?'#fb7185':(isDark?'#dbeafe':'#1e40af'); ctx.fillText(label,cx,cy);
     ctx.restore();
   });
-  // Nodes
   topoNodes.forEach(node=>{
-    const color=topoColors[node.status]||topoColors.unknown;
+    const statusColor=node.isExternal?topoColors.external:(topoColors[node.status]||topoColors.unknown);
     const isSelected=topoSelected===node.id;
-    const r=isSelected?28:22;
-    ctx.save();
-    // Highlight ring for nodes arrived via topology jump
-    if(isSelected){
-      ctx.beginPath();
-      ctx.arc(node.x,node.y,r+8,0,Math.PI*2);
-      ctx.strokeStyle=color;
-      ctx.lineWidth=2;
-      ctx.setLineDash([4,4]);
-      ctx.globalAlpha=0.5;
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha=1;
+    const r=isSelected?29:24;
+    ctx.save(); ctx.translate(node.x,node.y);
+    if(isSelected||node.status==='degraded'||node.status==='down'){
+      const pulse=6+Math.sin(now/260)*3;
+      ctx.beginPath(); ctx.arc(0,0,r+pulse,0,Math.PI*2); ctx.strokeStyle=statusColor; ctx.lineWidth=2; ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1;
     }
-    // Shadow
-    ctx.shadowColor=color; ctx.shadowBlur=isSelected?24:12;
-    // Node circle
-    ctx.beginPath();
-    ctx.arc(node.x,node.y,r,0,Math.PI*2);
-    const grad2=ctx.createRadialGradient(node.x-6,node.y-6,2,node.x,node.y,r);
-    grad2.addColorStop(0,isDark?'#1e3a5f':'#dbeafe');
-    grad2.addColorStop(1,isDark?'#0d1b2e':'#f0f9ff');
-    ctx.fillStyle=grad2;
-    ctx.fill();
-    ctx.strokeStyle=color;
-    ctx.lineWidth=isSelected?3:2;
-    ctx.stroke();
-    ctx.shadowBlur=0;
-    // Status dot
-    ctx.beginPath();
-    ctx.arc(node.x+r*0.65,node.y-r*0.65,5,0,Math.PI*2);
-    ctx.fillStyle=color;
-    ctx.fill();
-    // Label
-    ctx.fillStyle=isDark?'#c7d9f5':'#1e3a5f';
-    ctx.font=`bold ${isSelected?13:11}px DM Sans,system-ui`;
-    ctx.textAlign='center';
-    ctx.textBaseline='middle';
-    const short=node.label.slice(0,12);
-    ctx.fillText(short,node.x,node.y);
-    // Below: error rate
-    if(node.errorRate>0){
-      ctx.fillStyle=color;
-      ctx.font=`800 9px DM Sans,system-ui`;
-      ctx.fillText(`${node.errorRate.toFixed(1)}% err`,node.x,node.y+r+12);
-    }
+    ctx.shadowColor=statusColor; ctx.shadowBlur=isSelected?26:14;
+    const grad=ctx.createRadialGradient(-7,-8,3,0,0,r);
+    grad.addColorStop(0,isDark?'#1e293b':'#ffffff'); grad.addColorStop(1,isDark?'#020617':'#eff6ff');
+    ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill(); ctx.lineWidth=isSelected?3:2; ctx.strokeStyle=statusColor; ctx.stroke(); ctx.shadowBlur=0;
+    ctx.beginPath(); ctx.arc(r*.64,-r*.64,5,0,Math.PI*2); ctx.fillStyle=statusColor; ctx.fill();
+    ctx.fillStyle=isDark?'#e5f0ff':'#172554'; ctx.font=`900 ${isSelected?12:11}px DM Sans,system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(shortNodeLabel(node.label),0,-2);
+    ctx.font='800 9px DM Sans,system-ui'; ctx.fillStyle=node.errorRate>0?'#fb7185':(isDark?'#93c5fd':'#2563eb'); ctx.fillText(`${fmt(node.calls)} calls · ${fmtMs(node.p95)}`,0,r+15);
     ctx.restore();
   });
+  topoAnimFrame=requestAnimationFrame(drawTopo);
 }
+
+function shortNodeLabel(v){
+  const s=String(v||'').replace(/^https?:\/\//,'').replace(/^\/+/,'');
+  return s.length>15?s.slice(0,14)+'…':s;
+}
+function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
 async function initTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
-  await buildTopoFromLogs();
+  if(topoAnimFrame) cancelAnimationFrame(topoAnimFrame);
+  await buildTopoFromLogs(false);
   layoutTopo(canvas);
-  // If navigated from APIs page with a service highlight, auto-select that node
   if(state.topoHighlight){
     const match=topoNodes.find(n=>n.id===state.topoHighlight||n.label===state.topoHighlight);
-    if(match){topoSelected=match.id;showTopoDetail(match);}
-    state.topoHighlight=null; // consume once
+    if(match){topoSelected=match.id;showTopoDetail(match);} state.topoHighlight=null;
   }
   drawTopo();
   canvas.onclick=e=>{
-    const rect=canvas.getBoundingClientRect();
-    const x=e.clientX-rect.left,y=e.clientY-rect.top;
-    const hit=topoNodes.find(n=>Math.hypot(n.x-x,n.y-y)<28);
-    if(hit){
-      topoSelected=hit.id;
-      showTopoDetail(hit);
-    } else {
-      topoSelected=null;
-      if($('topoDetail')) $('topoDetail').hidden=true;
-    }
-    drawTopo();
+    const rect=canvas.getBoundingClientRect(); const x=e.clientX-rect.left,y=e.clientY-rect.top;
+    const hit=topoNodes.find(n=>Math.hypot(n.x-x,n.y-y)<32);
+    if(hit){topoSelected=hit.id;showTopoDetail(hit);} else {topoSelected=null;if($('topoDetail'))$('topoDetail').hidden=true;}
   };
-  // Dependency matrix
-  renderDepMatrix();
-  renderCriticalPaths();
-  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{await buildTopoFromLogs();layoutTopo(canvas);drawTopo();renderDepMatrix();renderCriticalPaths();};
-  window.addEventListener('resize',()=>{const c=$('topoCanvas');if(c){c.width=0;drawTopo();}});
+  renderDepMatrix(); renderCriticalPaths(); renderTopoRcaPanel();
+  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{topoLoadedKey='';await buildTopoFromLogs(true);layoutTopo(canvas);renderDepMatrix();renderCriticalPaths();renderTopoRcaPanel();};
 }
+
 function showTopoDetail(node){
-  const el=$('topoDetail'); if(!el) return;
-  el.hidden=false;
+  const el=$('topoDetail'); if(!el) return; el.hidden=false;
   if($('topoDetailName')) $('topoDetailName').textContent=node.label;
   const downstream=topoEdges.filter(e=>e.from===node.id).map(e=>topoNodes.find(n=>n.id===e.to)?.label).filter(Boolean);
   const upstream=topoEdges.filter(e=>e.to===node.id).map(e=>topoNodes.find(n=>n.id===e.from)?.label).filter(Boolean);
   if($('topoDetailBody')) $('topoDetailBody').innerHTML=`
     <div class="topo-kv-grid">
-      <div class="topo-kv"><small>Status</small><b style="color:${topoColors[node.status]||'#6b7280'}">${node.status}</b></div>
+      <div class="topo-kv"><small>Status</small><b style="color:${topoColors[node.status]||topoColors.unknown}">${esc(node.status)}</b></div>
       <div class="topo-kv"><small>Error Rate</small><b>${node.errorRate.toFixed(2)}%</b></div>
-      <div class="topo-kv"><small>P95 Latency</small><b>${node.p95||0}ms</b></div>
+      <div class="topo-kv"><small>P95 Latency</small><b>${fmtMs(node.p95)}</b></div>
       <div class="topo-kv"><small>Total Calls</small><b>${fmt(node.calls)}</b></div>
     </div>
+    <div style="display:flex;gap:8px;margin-top:12px"><button class="secondary" id="topoLogsBtn">Open logs</button><button id="topoRunRcaBtn">Run RCA</button></div>
     <div style="margin-top:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Upstream</div>${upstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
       <div><div style="font-weight:900;margin-bottom:6px;font-size:11px;color:var(--muted);text-transform:uppercase">Downstream</div>${downstream.map(s=>`<div style="padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:4px">${esc(s)}</div>`).join('')||'<div style="color:var(--muted);font-size:12px">None</div>'}</div>
     </div>`;
+  setTimeout(()=>{if($('topoLogsBtn'))$('topoLogsBtn').onclick=()=>{setPage('logs'); if($('logQuery')) $('logQuery').value=node.label; searchLogs(1);}; if($('topoRunRcaBtn'))$('topoRunRcaBtn').onclick=()=>runTopologyRca(node);},0);
+  renderTopoRcaPanel(node);
 }
+
+async function runTopologyRca(node){
+  const el=$('topoRcaPanel'); if(el) el.innerHTML='<div class="empty">Running RCA for selected topology node…</div>';
+  const related=topoEdges.filter(e=>e.from===node.id||e.to===node.id).sort((a,b)=>(b.errorRate-a.errorRate)||(b.p95-a.p95));
+  const query=`Analyze topology node ${node.label}. Calls=${node.calls}, errorRate=${node.errorRate.toFixed(2)}%, p95=${node.p95}ms. Related edges: ${related.map(e=>`${e.from}->${e.to} calls=${e.calls} p95=${e.p95}ms err=${e.errorRate}% path=${e.label}`).join('; ')}`;
+  try{
+    const data=await api(endpoint('/rca'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});
+    if(el) el.innerHTML=`<div class="rca-action ${node.errorRate>1?'danger':node.p95>1500?'warn':'ok'}"><div><b>${esc(data.likely_root_cause||'Topology RCA')}</b><p>${esc(data.summary||'No summary')}</p><small>${esc(data.ai_provider||'local')} · ${esc(data.ai_model||'rule-engine')}</small></div></div>${(data.recommended_actions||data.recommendations||[]).map(a=>`<div class="rca-action"><div><b>Recommended action</b><p>${esc(a)}</p></div></div>`).join('')}`;
+  }catch(e){ if(el) el.innerHTML=`<div class="rca-action danger"><div><b>RCA failed</b><p>${esc(e.message)}</p></div></div>`; }
+}
+
+function renderTopoRcaPanel(node=null){
+  const el=$('topoRcaPanel'); if(!el) return;
+  if(!node){
+    const worst=[...topoNodes].sort((a,b)=>(b.errorRate-a.errorRate)||(b.p95-a.p95))[0];
+    el.innerHTML=worst?`<div class="rca-action ${worst.errorRate>1?'danger':worst.p95>1500?'warn':'ok'}"><div><b>Most interesting node</b><p>${esc(worst.label)} · ${worst.errorRate.toFixed(2)}% errors · ${fmtMs(worst.p95)} p95</p></div><button class="secondary" id="quickTopoRca">Run RCA</button></div>`:'<div class="empty">No topology data yet.</div>';
+    setTimeout(()=>{if($('quickTopoRca'))$('quickTopoRca').onclick=()=>runTopologyRca(worst);},0); return;
+  }
+  el.innerHTML=`<div class="rca-action ${node.errorRate>1?'danger':node.p95>1500?'warn':'ok'}"><div><b>${esc(node.label)}</b><p>${node.errorRate.toFixed(2)}% errors · ${fmtMs(node.p95)} p95 · ${fmt(node.calls)} calls</p></div><button id="quickTopoRca">Run RCA</button></div>`;
+  setTimeout(()=>{if($('quickTopoRca'))$('quickTopoRca').onclick=()=>runTopologyRca(node);},0);
+}
+
 function renderDepMatrix(){
   const el=$('depMatrix'); if(!el) return;
-  if(!topoEdges.length){el.innerHTML='<div class="empty">No successful dependency data yet. Upload logs with trace IDs / FlowName / HTTP 2xx events to build the map.</div>';return;}
-  el.innerHTML=topoEdges.map(e=>{
-    const from=topoNodes.find(n=>n.id===e.from);
-    const to=topoNodes.find(n=>n.id===e.to);
+  if(!topoEdges.length){el.innerHTML='<div class="empty">No dependency data yet. Upload logs with endpoint paths and downstream request messages.</div>';return;}
+  el.innerHTML=topoEdges.slice(0,30).map(e=>{
+    const from=topoNodes.find(n=>n.id===e.from), to=topoNodes.find(n=>n.id===e.to);
     if(!from||!to) return '';
-    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:var(--text)">${esc(to.label)}</span><span class="level INFO" style="font-size:10px">${fmt(e.calls)} calls</span></div>`;
+    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:var(--text)">${esc(to.label)}</span><span class="level INFO" style="font-size:10px">${fmt(e.calls)} calls · ${fmtMs(e.p95)}</span></div>`;
   }).join('');
 }
 function renderCriticalPaths(){
   const el=$('criticalPaths'); if(!el) return;
-  if(!topoNodes.length){el.innerHTML='<div class="empty">No data yet.</div>';return;}
-  const paths=[...topoEdges].sort((a,b)=>(b.avgLatency||0)-(a.avgLatency||0)).slice(0,5);
-  if(!paths.length){el.innerHTML='<div class="empty">No successful request chains detected yet.</div>';return;}
+  const paths=[...topoEdges].sort((a,b)=>((b.errorRate*1000)+(b.p95||0))-((a.errorRate*1000)+(a.p95||0))).slice(0,6);
+  if(!paths.length){el.innerHTML='<div class="empty">No request chains detected yet.</div>';return;}
   el.innerHTML=paths.map(e=>{const from=topoNodes.find(n=>n.id===e.from);const to=topoNodes.find(n=>n.id===e.to);return `
     <div class="critical-path-item">
-      <div><code>${esc(from?.label||e.from)} → ${esc(to?.label||e.to)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(e.flowName||e.path||'successful flow')}</div></div>
-      <div class="cp-latency">${fmtMs(e.avgLatency)}</div>
+      <div><code>${esc(from?.label||e.from)} → ${esc(to?.label||e.to)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(e.label||'endpoint dependency')} · ${e.errorRate.toFixed(2)}% errors</div></div>
+      <div class="cp-latency">${fmtMs(e.p95||e.avgLatency)}</div>
     </div>`}).join('');
 }
 
