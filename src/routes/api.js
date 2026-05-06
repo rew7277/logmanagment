@@ -89,6 +89,27 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref?.();
 
+// ─── Bounded ingestion queue: at most 10 files parse/index concurrently ───────
+const MAX_CONCURRENT_INGESTIONS = Number(process.env.MAX_CONCURRENT_INGESTIONS || 10);
+const ingestionQueue = [];
+let activeIngestions = 0;
+
+function enqueueIngestion(job, filePath, workspace, environment) {
+  ingestionQueue.push({ job, filePath, workspace, environment });
+  updateJob(job, { status: 'queued', stage: `Queued for parsing… (${ingestionQueue.length} waiting, ${activeIngestions}/${MAX_CONCURRENT_INGESTIONS} running)` });
+  setImmediate(runNextIngestion);
+}
+
+function runNextIngestion() {
+  while (activeIngestions < MAX_CONCURRENT_INGESTIONS && ingestionQueue.length) {
+    const next = ingestionQueue.shift();
+    activeIngestions += 1;
+    processUploadedFile(next.job, next.filePath, next.workspace, next.environment)
+      .catch(err => updateJob(next.job, { status: 'failed', stage: 'Failed', error: err.message || String(err) }))
+      .finally(() => { activeIngestions -= 1; setImmediate(runNextIngestion); });
+  }
+}
+
 // ─── Parallel flush queue (producer–consumer) ────────────────────────────────
 /**
  * Returns an object with:
@@ -492,8 +513,8 @@ router.post('/:workspace/:environment/logs/upload-async', ingestLimit, asyncHand
   }).catch(() => {});
   updateJob(job, { status: 'queued', stage: 'Queued for parsing…', bytes });
 
-  // Fire-and-forget background processing
-  setImmediate(() => processUploadedFile(job, filePath, workspace, environment));
+  // Bounded background processing: max 10 log files at a time
+  enqueueIngestion(job, filePath, workspace, environment);
 
   res.status(202).json({ data: job });
 }));

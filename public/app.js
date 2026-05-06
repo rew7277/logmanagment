@@ -43,7 +43,22 @@ function toast(msg, type='info'){const t=document.createElement('div');t.classNa
 function endpoint(path){return `/api/${state.workspace}/${state.environment}${path}`;}
 function apiBaseUrl(){return window.location.origin;}
 function fullEndpoint(path){return `${apiBaseUrl()}${endpoint(path)}`;}
-async function api(url,opt={}){const r=await fetch(url,opt);let j={};try{j=await r.json();}catch{}if(!r.ok)throw new Error(j.error||`Request failed (${r.status})`);return j.data ?? j;}
+async function api(url,opt={}){
+  let r;
+  try { r = await fetch(url,opt); }
+  catch (networkError) { throw new Error(`Network error: ${networkError.message}`); }
+  const contentType = r.headers.get('content-type') || '';
+  let payload = null;
+  if (contentType.includes('application/json')) {
+    try { payload = await r.json(); } catch { payload = null; }
+  } else {
+    const text = await r.text().catch(()=> '');
+    if(!r.ok) throw new Error(text?.slice(0,180) || `Request failed (${r.status})`);
+    throw new Error(`Expected JSON from ${url}, but received ${contentType || 'unknown content type'}. Check backend route / API response.`);
+  }
+  if(!r.ok) throw new Error(payload?.error || payload?.message || `Request failed (${r.status})`);
+  return payload?.data ?? payload;
+}
 function applyTheme(){document.documentElement.classList.toggle('dark',state.theme==='dark');localStorage.setItem('observex-theme',state.theme);$('themeIcon')&&($('themeIcon').textContent=state.theme==='dark'?'☀':'☾');}
 function applySidebar(){const closed=state.sidebar==='closed';$('appShell')&&$('appShell').classList.toggle('sidebar-collapsed',closed);localStorage.setItem('observex-sidebar',state.sidebar);}
 function setPage(page){
@@ -140,11 +155,46 @@ async function openTraceDetail(traceId){
   if(!traceId) return;
   try{
     const data=await api(endpoint('/traces/'+encodeURIComponent(traceId)));
+    state.selectedTrace=data;
     setText('modalTitle',`Trace waterfall · ${traceId}`);
     const steps=data.waterfall||[];
-    setHtml('modalBody', steps.length?`<div class="trace-waterfall">${steps.map(st=>`<div class="trace-step ${esc(st.severity)}"><span class="step-dot"></span><div><b>${esc(st.service_name||'Unknown service')}</b><small>${esc((st.method||'')+' '+(st.path||''))}</small><p>${esc(String(st.message||'').slice(0,180))}</p></div><div><small>+${fmt(st.at_ms)}ms</small><b>${fmtMs(st.latency_ms)}</b></div></div>`).join('')}</div>`:empty('No events found for this trace ID.'));
+    const summary=data.summary||{};
+    const summaryHtml=`<div class="modal-section trace-summary"><div class="modal-grid">
+      <div><small>Trace ID</small><b class="copy-field" title="Click to copy">${esc(traceId)}</b></div>
+      <div><small>Events</small><b>${fmt(summary.events ?? steps.length)}</b></div>
+      <div><small>Status</small><b style="color:${summary.errors?'var(--bad)':'var(--good)'}">${summary.errors?'error':'healthy'}</b></div>
+      <div><small>Duration</small><b>${fmtMs(summary.duration_ms||0)}</b></div>
+      <div><small>Services</small><b>${esc((summary.services||[]).join(', ')||'-')}</b></div>
+      <div><small>Errors</small><b>${fmt(summary.errors||0)}</b></div>
+    </div></div>`;
+    const body=steps.length?`<div class="trace-waterfall">${steps.map((st,idx)=>`<button type="button" class="trace-step ${esc(st.severity)}" data-event-index="${idx}"><span class="step-dot"></span><div><b>${esc(st.service_name||'Unknown service')}</b><small>${esc((st.method||'')+' '+(st.path||''))}</small><p>${esc(String(st.message||'').slice(0,220))}</p></div><div><small>+${fmt(st.at_ms)}ms</small><b>${fmtMs(st.latency_ms)}</b><small>${esc(st.severity||'')}</small></div></button>`).join('')}</div><div id="traceEventPopup" class="trace-event-popup" hidden></div>`:empty('No events found for this trace ID. Try searching the trace/event/correlation ID in Log Search.');
+    setHtml('modalBody', summaryHtml+body);
+    $('modalTraceBtn')&&($('modalTraceBtn').disabled=true);
     $('logModal')&&$('logModal').classList.add('open');
+    $$('.trace-step[data-event-index]').forEach(btn=>btn.onclick=()=>showTraceEventPopup(Number(btn.dataset.eventIndex)));
+    $$('.copy-field').forEach(el=>el.onclick=()=>{navigator.clipboard?.writeText(el.textContent).then(()=>toast('Copied!','success'));});
   }catch(e){toast(e.message,'error');}
+}
+
+function showTraceEventPopup(index){
+  const event=(state.selectedTrace?.events||[])[index];
+  const host=$('traceEventPopup');
+  if(!event || !host) return;
+  host.hidden=false;
+  host.innerHTML=`<div class="trace-popup-head"><div><b>Full trace log payload</b><small>${esc(event.service_name||'Unknown service')} · ${esc(event.severity||'-')}</small></div><button class="secondary tiny" type="button" id="closeTraceEventPopup">Close</button></div>
+    <div class="modal-grid">
+      <div><small>Timestamp</small><b>${esc(new Date(event.timestamp).toLocaleString())}</b></div>
+      <div><small>Endpoint</small><b>${esc((event.method||'')+' '+(event.path||''))}</b></div>
+      <div><small>Latency</small><b>${fmtMs(event.latency_ms||event.raw?.latency_ms||0)}</b></div>
+      <div><small>Trace ID</small><b class="copy-field">${esc(event.trace_id||event.raw?.event_id||'-')}</b></div>
+    </div>
+    <div class="modal-section-title">Message</div>
+    <pre class="modal-pre">${esc(event.message||'')}</pre>
+    <div class="modal-section-title">Raw JSON</div>
+    <pre class="modal-pre json-pre">${esc(JSON.stringify(event.raw||event,null,2))}</pre>`;
+  $('closeTraceEventPopup')&&($('closeTraceEventPopup').onclick=()=>{host.hidden=true;host.innerHTML='';});
+  $$('.copy-field').forEach(el=>el.onclick=()=>{navigator.clipboard?.writeText(el.textContent).then(()=>toast('Copied!','success'));});
+  host.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
 
 function openEndpointErrors(service,path){
@@ -170,7 +220,10 @@ async function loadOverview(){
     setHtml('metrics',[
       metric(state.environment,score?score+'%':'--','Calculated health',tone),
       metric('Error rate',`${Number(m.error_rate||0).toFixed(2)}%`,'From ERROR/FATAL logs',Number(m.error_rate)>5?'bad':'good'),
+      metric('Error spike',fmt(m.error_spike_events||0),'Errors in latest hour above previous hour',Number(m.error_spike_events)>20?'bad':Number(m.error_spike_events)>0?'warn':'good'),
       metric('P95 latency',fmtMs(m.p95_latency_ms),'From traces',Number(m.p95_latency_ms)>1000?'bad':'neutral'),
+      metric('Throughput 1h',fmt(m.throughput_1h||0),'Events received in last hour','neutral'),
+      metric('Top error',fmt(m.top_error_count||0),String(m.top_error_signature||'No errors observed').slice(0,70),Number(m.top_error_count)?'warn':'good'),
       metric('Logs',fmt(m.logs_ingested),'Total ingested logs','neutral'),
       metric('Alerts',fmt(m.active_alerts),'Open incidents',Number(m.active_alerts)?'warn':'good')
     ].join(''));
@@ -209,16 +262,16 @@ async function loadApisEndpoints(q){
             <span class="api-acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></span>
             <div class="api-acc-name"><strong>${esc(s.name)}</strong><small>${svcEps.length} endpoint${svcEps.length!==1?'s':''} · Auto-discovered · ${esc(s.owner||'Unowned')} ${s.last_seen?'· Last seen '+new Date(s.last_seen).toLocaleTimeString():''} ${s.traffic_delta_pct!==null&&s.traffic_delta_pct!==undefined?'· Traffic '+(Number(s.traffic_delta_pct)>0?'+':'')+Number(s.traffic_delta_pct).toFixed(1)+'%':''}</small></div>
           </div>
-          <div class="api-acc-stats metrics-clean">
-            <div class="api-acc-stat trend"><small>7-day volume</small>${sparklineBars(s.volume_7d)}</div>
+          <div class="api-acc-stats metrics-clean compact-api-stats">
             <div class="api-acc-stat status-metric"><small>Status</small><b class="status-badge ${esc(s.status||'observed')}"><span class="status-dot"></span>${esc(s.status||'observed')}</b></div>
             <div class="api-acc-stat"><small>Error</small><b style="color:${errColor}">${errRate.toFixed(2)}%</b></div>
             <div class="api-acc-stat"><small>P95</small><b>${fmtMs(s.p95_latency_ms)}</b></div>
             <div class="api-acc-stat"><small>Health</small><b style="color:${health>=80?'var(--good)':health>=50?'var(--warn)':'var(--bad)'}">${health?health+'%':'—'}</b></div>
+            <span class="mini-link danger delete-api api-delete-inline" data-service="${esc(s.name)}" title="Delete API from selected environment" role="button" tabindex="0">Delete</span>
           </div>
         </button>
-        <div class="api-accordion-body"><div class="api-accordion-body-inner"><div class="api-manage-row"><button class="mini-link danger delete-api" data-service="${esc(s.name)}">Delete API</button><span>Manual delete hides this API/endpoint from the selected environment.</span></div>
-          ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><span><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button><button class="mini-link danger delete-endpoint" data-service="${esc(s.name)}" data-method="${esc(meth)}" data-path="${esc(ep.path||'')}">Delete</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
+        <div class="api-accordion-body"><div class="api-accordion-body-inner"><div class="api-manage-row api-manage-row-note"><span>Manual delete hides this API/endpoint from the selected environment.</span></div>
+          ${(s.top_errors&&s.top_errors.length)?`<div class="top-errors-mini"><b>Top errors</b>${s.top_errors.map(e=>`<span>${esc(String(e.signature||'Unknown').slice(0,34))} · ${fmt(e.count)}</span>`).join('')}</div>`:''}${svcEps.length?`<div class="ep-inner-table"><div class="ep-inner-header"><span>Method</span><span>Path</span><span>Status</span><span>Calls</span><span>Error %</span><span>P95</span><span>Action</span></div>${svcEps.map(ep=>{const er=Number(ep.error_rate||0);const meth=(ep.method||'?').toUpperCase();return `<div class="ep-inner-row"><span><span class="method-badge meth-${esc(meth)}">${esc(meth)}</span></span><span class="ep-path">${esc(ep.path||'-')}</span><span><span class="status-badge ${esc(ep.status||'observed')}">${esc(ep.status||'observed')}</span></span><span><b>${fmt(ep.calls_total??ep.calls_per_hour)}</b></span><span><b style="color:${er>5?'var(--bad)':er>1?'var(--warn)':'var(--good)'}">${er.toFixed(2)}%</b></span><span><b>${fmtMs(ep.p95_latency_ms)}</b></span><span class="endpoint-actions"><button class="mini-link endpoint-errors" data-service="${esc(s.name)}" data-path="${esc(ep.path||'')}">View errors →</button><button class="mini-link danger delete-endpoint" data-service="${esc(s.name)}" data-method="${esc(meth)}" data-path="${esc(ep.path||'')}">Delete</button></span></div>`;}).join('')}</div>`:'<div class="ep-inner-empty">No endpoints discovered yet for this API.</div>'}
         </div></div>
       </div>`;
     }).join('');
@@ -278,7 +331,7 @@ async function searchLogs(page=state.logPage){
   function traceChip(l){
     const tid=l.trace_id||l.raw?.event_id||l.raw?.correlation_id;
     if(!tid) return '';
-    return `<span class="trace-chip" title="Trace: ${esc(tid)}">⛓ Trace</span>`;
+    return `<span class="trace-chip" data-trace-id="${esc(tid)}" title="Open trace waterfall: ${esc(tid)}">⛓ Trace</span>`;
   }
   function msgHighlight(msg,q){
     if(!q||!msg) return esc(msg||'');
@@ -311,6 +364,7 @@ async function searchLogs(page=state.logPage){
   if($('prevLogsBtn')) $('prevLogsBtn').disabled=(result.page||1)<=1;
   if($('nextLogsBtn')) $('nextLogsBtn').disabled=(result.page||1)>=(result.total_pages||1);
   $$('.log-line[data-log-index]').forEach(btn=>btn.onclick=()=>openLogModal(state.lastLogs[Number(btn.dataset.logIndex)]));
+  $$('.trace-chip[data-trace-id]').forEach(chip=>chip.onclick=(ev)=>{ev.stopPropagation();openTraceDetail(chip.dataset.traceId);});
 }
 function openLogModal(log){
   if(!log) return;
@@ -727,10 +781,10 @@ function showIngestProgress(job){
   }
 }
 
-async function pollIngestionJob(jobId){
+async function pollIngestionJob(jobId, silent=false){
   for(let i=0;i<720;i++){
     const job = await api(endpoint(`/ingestion/${jobId}`));
-    showIngestProgress(job);
+    if(!silent) showIngestProgress(job);
     if(job.status==='completed') return job;
     if(job.status==='failed') throw new Error(job.error || job.meta?.error || 'Ingestion failed. Open Upload History to see details.');
     await new Promise(r=>setTimeout(r, 1000));
@@ -738,27 +792,76 @@ async function pollIngestionJob(jobId){
   throw new Error('Ingestion is still running. Please check Ops → Ingestion Jobs.');
 }
 
-async function uploadBody(body,name='pasted logs'){
+async function uploadManyFiles(files){
+  const list=Array.from(files||[]).filter(Boolean).slice(0, 200);
+  if(!list.length) return;
+  const MAX_CONCURRENT_UPLOADS = 10;
+  const totalBytes=list.reduce((a,f)=>a+(f.size||0),0);
+  const results=list.map(f=>({file:f.name,status:'queued'}));
+  const renderBatch=()=>{
+    const done=results.filter(r=>['completed','failed'].includes(r.status)).length;
+    const ok=results.filter(r=>r.status==='completed').length;
+    const failed=results.filter(r=>r.status==='failed').length;
+    setText('uploadStatus',`Batch ${done}/${results.length} · running up to ${MAX_CONCURRENT_UPLOADS} files · ${ok} completed${failed?` · ${failed} failed`:''}`);
+    const progress=$('ingestProgress'); if(progress) progress.hidden=false;
+    setText('ingestStage',`Batch upload running (${Math.min(MAX_CONCURRENT_UPLOADS, list.length)} parallel)`);
+    setText('ingestMeta',`${fmt(results.length)} files · ${fileSize(totalBytes)} total`);
+    setText('ingestPercent',`${Math.round((done/Math.max(results.length,1))*100)}%`);
+    setText('ingestParsed',`${fmt(ok)} completed`); setText('ingestInserted',`${fmt(failed)} failed`); setText('ingestSpeed',`${fmt(results.length-done)} active/queued`);
+    const bar=$('ingestBar'); if(bar) bar.style.width=`${Math.round((done/Math.max(results.length,1))*100)}%`;
+  };
+  toast(`Queued ${list.length} file(s) · processing ${Math.min(MAX_CONCURRENT_UPLOADS, list.length)} at a time`,'info');
+  renderBatch();
+  let cursor=0;
+  async function worker(workerNo){
+    while(cursor<list.length){
+      const i=cursor++;
+      const f=list[i];
+      results[i].status='uploading'; renderBatch();
+      try{
+        await uploadBody(f,f.name,{batchIndex:i+1,batchTotal:list.length,refresh:false,silent:true});
+        results[i].status='completed';
+      }catch(e){
+        results[i].status='failed'; results[i].error=e.message;
+        toast(`${f.name}: ${e.message}`,'error');
+      }
+      renderBatch();
+    }
+  }
+  await Promise.all(Array.from({length:Math.min(MAX_CONCURRENT_UPLOADS, list.length)},(_,i)=>worker(i+1)));
+  const ok=results.filter(r=>r.status==='completed').length;
+  const failed=results.length-ok;
+  setText('uploadStatus',`Batch completed · ${ok}/${results.length} succeeded${failed?` · ${failed} failed`:''}`);
+  await Promise.allSettled([loadOverview(),loadApisEndpoints(),loadAlertsOps(),loadUploadHistory(),searchLogs(1)]);
+  toast(`Batch upload finished: ${ok} succeeded${failed?`, ${failed} failed`:''}` , failed?'error':'success');
+}
+
+async function uploadBody(body,name='pasted logs',opts={}){
   const headers={'Content-Type':'text/plain','X-File-Name':name};
   const isFile = typeof File !== 'undefined' && body instanceof File;
   const size = isFile ? body.size : new Blob([body]).size;
-  setText('uploadStatus',`Starting ingestion for ${name}...`);
-  showIngestProgress({fileName:name,status:'receiving',stage:'Preparing upload',bytes:size,parsed:0,inserted:0,speed:0});
+  if(!opts.silent){
+    setText('uploadStatus',`${opts.batchTotal?`File ${opts.batchIndex}/${opts.batchTotal} · `:''}Starting ingestion for ${name}...`);
+    showIngestProgress({fileName:name,status:'receiving',stage:'Preparing upload',bytes:size,parsed:0,inserted:0,speed:0});
+  }
   try{
     const start=performance.now();
     const startRes=await api(endpoint('/logs/upload-async'),{method:'POST',headers,body});
-    showIngestProgress(startRes);
-    setText('uploadStatus',`Queued ${name}. Parsing in background...`);
-    const job=await pollIngestionJob(startRes.id);
+    if(!opts.silent){ showIngestProgress(startRes); setText('uploadStatus',`Queued ${name}. Parsing in background...`); }
+    const job=await pollIngestionJob(startRes.id, opts.silent);
     const sec=Math.max((performance.now()-start)/1000,.1).toFixed(1);
-    toast(`Ingested ${fmt(job.inserted||0)} events in ${sec}s`,'success');
-    setText('uploadStatus',`Upload completed · ${fmt(job.inserted||0)} events · ${fmt(job.speed||0)} logs/sec · ${sec}s`);
+    if(!opts.batchTotal && !opts.silent) toast(`Ingested ${fmt(job.inserted||0)} events in ${sec}s`,'success');
+    if(!opts.silent) setText('uploadStatus',`Upload completed · ${fmt(job.inserted||0)} events · ${fmt(job.speed||0)} logs/sec · ${sec}s`);
     if($('logUpload')) $('logUpload').value='';
     if($('quickTime')) $('quickTime').value='all';
-    await Promise.allSettled([loadOverview(),loadApisEndpoints(),loadAlertsOps(),loadUploadHistory(),searchLogs(1)]);
-    toast('Upload complete. Metrics, services, endpoints and search are refreshed.','success');
-  }catch(e){setText('uploadStatus','Upload failed');toast(e.message,'error');showIngestProgress({fileName:name,status:'failed',stage:'Failed',bytes:size,parsed:0,inserted:0,speed:0,error:e.message});
-    await Promise.allSettled([loadUploadHistory(), loadOverview()]);}
+    if(opts.refresh!==false){
+      await Promise.allSettled([loadOverview(),loadApisEndpoints(),loadAlertsOps(),loadUploadHistory(),searchLogs(1)]);
+      toast('Upload complete. Metrics, services, endpoints and search are refreshed.','success');
+    }
+  }catch(e){if(!opts.silent){setText('uploadStatus','Upload failed');toast(e.message,'error');showIngestProgress({fileName:name,status:'failed',stage:'Failed',bytes:size,parsed:0,inserted:0,speed:0,error:e.message});}
+    await Promise.allSettled([loadUploadHistory(), loadOverview()]);
+    if(opts.batchTotal) throw e;
+  }
 }
 
 function renderEnvButtons(){
@@ -864,6 +967,6 @@ async function deleteApiRegistry(payload){
   }catch(e){toast(e.message,'error');}
 }
 
-function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadBody(f,f.name);});fi.onchange=()=>{if(fi.files[0])uploadBody(fi.files[0],fi.files[0].name);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
+function bind(){Object.entries(icons).forEach(([k,v])=>$$(`[data-icon="${k}"]`).forEach(x=>x.innerHTML=v));if($('edgeToggle')) $('edgeToggle').onclick=()=>{state.sidebar=state.sidebar==='closed'?'open':'closed';applySidebar();}; $$('.endpoint-doc').forEach(b=>b.onclick=()=>renderApiDoc(b.dataset.docEndpoint)); if($('sendApiDocBtn')) $('sendApiDocBtn').onclick=sendApiDocRequest; if($('aeSearch')){$('aeSearch').addEventListener('input',e=>{loadApisEndpoints(e.target.value);});};if($('addApiBtn'))$('addApiBtn').onclick=()=>{$('apiRegistryPanel').hidden=!$('apiRegistryPanel').hidden;};if($('saveManualApiBtn'))$('saveManualApiBtn').onclick=createManualApi;if($('themeToggle')) $('themeToggle').onclick=()=>{state.theme=state.theme==='dark'?'light':'dark';applyTheme();};$$('[data-page-link]').forEach(a=>a.onclick=(e)=>{e.preventDefault();setPage(a.dataset.pageLink);});if($('serviceFilter')) $('serviceFilter').onchange=()=>{refreshPathFilter(); if($('pathFilter')) $('pathFilter').value=''; loadErrorGroups();}; if($('pathFilter')) $('pathFilter').onchange=loadErrorGroups; if($('quickTime')) $('quickTime').onchange=loadErrorGroups;if($('saveSearchBtn')) $('saveSearchBtn').onclick=saveCurrentSearch;if($('runAnomalyBtn')) $('runAnomalyBtn').onclick=runAnomalyCheck;if($('evaluateAlertsBtn')) $('evaluateAlertsBtn').onclick=evaluateAlertsNow;if($('createRuleBtn')) $('createRuleBtn').onclick=createCustomRule;if($('savePolicyBtn'))$('savePolicyBtn').onclick=saveEnvironmentPolicy;if($('resetPolicyBtn'))$('resetPolicyBtn').onclick=resetEnvironmentPolicy;if($('saveMaskRuleBtn'))$('saveMaskRuleBtn').onclick=saveMaskRule;if($('saveAiProviderBtn'))$('saveAiProviderBtn').onclick=saveAiProvider;if($('createEnvironmentBtn'))$('createEnvironmentBtn').onclick=createCustomEnvironment;if($('createIngestKeyBtn'))$('createIngestKeyBtn').onclick=createIngestKey;if($('testMaskingBtn'))$('testMaskingBtn').onclick=testMasking;if($('searchLogsBtn')) $('searchLogsBtn').onclick=()=>searchLogs(1);if($('prevLogsBtn')) $('prevLogsBtn').onclick=()=>searchLogs(state.logPage-1);if($('nextLogsBtn')) $('nextLogsBtn').onclick=()=>searchLogs(state.logPage+1);if($('clearFiltersBtn')) $('clearFiltersBtn').onclick=()=>{['logQuery','severityFilter','serviceFilter','pathFilter'].forEach(id=>$(id)&&($(id).value=''));if($('quickTime'))$('quickTime').value='all';state.traceFilter='';state.uploadFilter='';searchLogs(1);};if($('clearLogsBtn'))$('clearLogsBtn').onclick=clearUploadedLogs;if($('refreshUploadsBtn'))$('refreshUploadsBtn').onclick=loadUploadHistory;if($('deleteSelectedUploadsBtn'))$('deleteSelectedUploadsBtn').onclick=()=>deleteUploads([...state.uploadSelections]);if($('deleteAllUploadsBtn'))$('deleteAllUploadsBtn').onclick=deleteAllUploads;if($('askRcaBtn')) $('askRcaBtn').onclick=runRca;if($('rcaPageBtn')) $('rcaPageBtn').onclick=runRca;if($('modalClose')) $('modalClose').onclick=closeLogModal;if($('modalTraceBtn')) $('modalTraceBtn').onclick=()=>{const tid=state.selectedLog?.trace_id||state.selectedLog?.raw?.event_id||state.selectedLog?.raw?.correlation_id;if(!tid)return;openTraceDetail(tid);};if($('logModal')) $('logModal').onclick=e=>{if(e.target.id==='logModal')closeLogModal();};const dz=$('dropZone'),fi=$('fileInput');if(dz&&fi){dz.onclick=()=>fi.click();['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files&&files.length)uploadManyFiles(files);});fi.onchange=()=>{if(fi.files&&fi.files.length)uploadManyFiles(fi.files);};if($('uploadBtn')) $('uploadBtn').onclick=()=>{const text=($('logUpload')?.value||'').trim();if(!text)return toast('Paste logs or choose a file first','error');uploadBody(text);};}}
 async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=state.environment);renderEnvButtons();await Promise.allSettled([loadOverview(),loadApisEndpoints(),searchLogs(1),loadAlertsOps(),loadUploadHistory(),loadSavedSearches()]);}
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();

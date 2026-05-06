@@ -145,12 +145,16 @@ export async function getOverview(workspaceSlug, environmentName) {
         active_alerts: 0,
         services: 0,
         endpoints: 0,
+        throughput_1h: 0,
+        error_spike_events: 0,
+        top_error_signature: 'No errors observed',
+        top_error_count: 0,
         masking_coverage: 0
       }
     };
   }
 
-  const [logStats, alertStats, serviceStats, endpointStats, traceStats] = await Promise.all([
+  const [logStats, alertStats, serviceStats, endpointStats, traceStats, recentStats, prevStats, topError] = await Promise.all([
     query(
       `SELECT count(*)::int logs_ingested,
               COALESCE(100.0 * count(*) FILTER (WHERE severity IN ('ERROR','FATAL')) / NULLIF(count(*),0),0)::numeric(7,2) error_rate
@@ -167,6 +171,24 @@ export async function getOverview(workspaceSlug, environmentName) {
       `SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms),0)::int p95_latency_ms
        FROM traces WHERE environment_id=$1 AND started_at >= now() - interval '24 hours'`,
       [env.id]
+    ),
+    query(
+      `SELECT count(*)::int total,
+              count(*) FILTER (WHERE severity IN ('ERROR','FATAL'))::int errors
+       FROM log_events WHERE environment_id=$1 AND timestamp >= now() - interval '1 hour'`,
+      [env.id]
+    ),
+    query(
+      `SELECT count(*)::int total,
+              count(*) FILTER (WHERE severity IN ('ERROR','FATAL'))::int errors
+       FROM log_events WHERE environment_id=$1 AND timestamp >= now() - interval '2 hour' AND timestamp < now() - interval '1 hour'`,
+      [env.id]
+    ),
+    query(
+      `SELECT COALESCE(NULLIF(error_type,''), NULLIF(message,''), 'Unknown error') AS signature, count(*)::int count
+       FROM log_events WHERE environment_id=$1 AND severity IN ('ERROR','FATAL')
+       GROUP BY 1 ORDER BY count DESC LIMIT 1`,
+      [env.id]
     )
   ]);
 
@@ -179,6 +201,10 @@ export async function getOverview(workspaceSlug, environmentName) {
       active_alerts: alertStats.rows[0].active_alerts,
       services: serviceStats.rows[0].services,
       endpoints: endpointStats.rows[0].endpoints,
+      throughput_1h: recentStats.rows[0]?.total || 0,
+      error_spike_events: Math.max(0, (recentStats.rows[0]?.errors || 0) - (prevStats.rows[0]?.errors || 0)),
+      top_error_signature: topError.rows[0]?.signature || 'No errors observed',
+      top_error_count: topError.rows[0]?.count || 0,
       masking_coverage: 0
     }
   };
@@ -957,6 +983,7 @@ export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
      WHERE le.environment_id=$1 AND (le.trace_id=$2 OR le.raw->>'event_id'=$2 OR le.raw->>'correlation_id'=$2 OR le.raw->>'transaction_id'=$2)
      ORDER BY le.timestamp ASC LIMIT 300`, [env.id, traceId]);
   const first = events.rows[0]?.timestamp ? new Date(events.rows[0].timestamp).getTime() : Date.now();
+  const last = events.rows.length ? new Date(events.rows[events.rows.length - 1].timestamp).getTime() : first;
   const waterfall = events.rows.map((e, idx) => ({
     step: idx + 1,
     at_ms: Math.max(0, new Date(e.timestamp).getTime() - first),
@@ -965,9 +992,19 @@ export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
     path: e.path,
     severity: e.severity,
     latency_ms: e.latency_ms || 0,
+    http_status: e.http_status || null,
     message: e.message
   }));
-  return { trace: trace.rows[0] || null, events: events.rows, waterfall };
+  const services = [...new Set(events.rows.map(e => e.service_name).filter(Boolean))];
+  const summary = {
+    events: events.rows.length,
+    errors: events.rows.filter(e => ['ERROR','FATAL'].includes(String(e.severity || '').toUpperCase())).length,
+    warnings: events.rows.filter(e => String(e.severity || '').toUpperCase() === 'WARN').length,
+    services,
+    duration_ms: Math.max(0, last - first),
+    max_latency_ms: Math.max(0, ...events.rows.map(e => Number(e.latency_ms || 0)))
+  };
+  return { trace: trace.rows[0] || null, events: events.rows, waterfall, summary };
 }
 
 export async function getErrorGroups(workspaceSlug, environmentName, filters = {}) {
