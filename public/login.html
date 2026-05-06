@@ -29,7 +29,7 @@
       display:flex;
       align-items:center;
       justify-content:center;
-      overflow:hidden;
+      overflow:auto;
       position:relative;
     }
 
@@ -65,7 +65,7 @@
       padding:32px 16px;
     }
     @media(min-width:860px){
-      .auth-wrap{grid-template-columns:520px 440px;gap:48px;max-width:1080px;margin:auto}
+      .auth-wrap{grid-template-columns:minmax(420px,520px) minmax(360px,440px);gap:36px;max-width:1060px;margin:auto}
       .auth-hero{display:flex}
     }
 
@@ -108,7 +108,9 @@
       background:var(--card);
       border:1px solid var(--line);
       border-radius:28px;
-      padding:36px 32px;
+      padding:28px 28px;
+      max-height:calc(100vh - 36px);
+      overflow:auto;
       backdrop-filter:blur(24px);
       box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.04);
       position:relative;overflow:hidden;
@@ -136,7 +138,7 @@
     .tab-btn.active{background:rgba(59,130,246,.18);color:#93c5fd;border:1px solid rgba(59,130,246,.25)}
 
     /* forms */
-    .form-group{margin-bottom:16px}
+    .form-group{margin-bottom:12px}
     .form-label{
       display:block;font-size:11px;font-weight:700;text-transform:uppercase;
       letter-spacing:1px;color:var(--muted);margin-bottom:7px;
@@ -286,7 +288,6 @@
     </div>
     <p class="hero-desc">Monitor services, trace requests, detect anomalies, and run AI-powered root cause analysis across all your environments — in real time.</p>
     <div class="feature-pills">
-      <span class="pill"><span class="pill-dot" style="background:#10b981"></span>Live Log Streaming</span>
       <span class="pill"><span class="pill-dot" style="background:#3b82f6"></span>AI RCA Engine</span>
       <span class="pill"><span class="pill-dot" style="background:#8b5cf6"></span>Smart Alerts</span>
       <span class="pill"><span class="pill-dot" style="background:#06b6d4"></span>Topology View</span>
@@ -365,35 +366,16 @@
         <div class="workspace-note">This will be your team's unique URL. Only lowercase letters, numbers, and hyphens.</div>
       </div>
       <div class="form-group">
-        <label class="form-label">Invitation code <span style="color:#8b5cf6">· Required</span></label>
+        <label class="form-label">Invitation code <span style="color:#8b5cf6">· Optional</span></label>
         <div class="input-wrap">
           <span class="input-icon"><svg viewBox="0 0 24 24"><path d="m21 2-1 7H4L3 2M12 13v8M8 17l4 4 4-4"/><path d="m21 2-2 7"/></svg></span>
-          <input class="form-input has-icon" id="signupInvite" type="text" placeholder="OX-XXXX-XXXX" autocomplete="off" style="font-family:'JetBrains Mono',monospace;letter-spacing:1px"/>
+          <input class="form-input has-icon" id="signupInvite" type="text" placeholder="Optional for first admin setup" autocomplete="off" style="font-family:'JetBrains Mono',monospace;letter-spacing:1px"/>
         </div>
-        <div class="invite-note"><b>First-time setup?</b> Use code <b style="font-family:'JetBrains Mono',monospace">OX-INIT-2026</b> to create the admin account. Subsequent users need an invite from an admin.</div>
+        <div class="invite-note"><b>Admin setup:</b> invite code is optional while creating the organisation admin account. Admins can generate invite codes later from Settings → Invite Codes.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Role</label>
-        <div class="role-grid" id="roleGrid">
-          <label class="role-card selected" onclick="selectRole('admin',this)">
-            <input type="radio" name="role" value="admin" checked/>
-            <div class="role-card-icon">🛡️</div>
-            <div class="role-card-name">Admin</div>
-            <div class="role-card-desc">Full access</div>
-          </label>
-          <label class="role-card" onclick="selectRole('member',this)">
-            <input type="radio" name="role" value="member"/>
-            <div class="role-card-icon">👤</div>
-            <div class="role-card-name">Member</div>
-            <div class="role-card-desc">Ops + Alerts</div>
-          </label>
-          <label class="role-card" onclick="selectRole('viewer',this)">
-            <input type="radio" name="role" value="viewer"/>
-            <div class="role-card-icon">👁️</div>
-            <div class="role-card-name">Viewer</div>
-            <div class="role-card-desc">Read only</div>
-          </label>
-        </div>
+        <div class="workspace-note">Organisation account creation is restricted to <b>Admin</b>. After login, the admin can create invite codes for members and viewers.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Password</label>
@@ -420,7 +402,7 @@
 <!-- Demo hint -->
 <div class="demo-strip">
   <svg viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-  Demo: <b>admin@observex.io</b> / <b>demo1234</b> — or use invite code <b style="font-family:monospace">OX-INIT-2026</b>
+  Demo: <b>admin@observex.io</b> / <b>demo1234</b>
 </div>
 
 <script>
@@ -537,11 +519,12 @@ async function handleSignup(){
   const workspace=document.getElementById('signupWorkspace').value.trim();
   const inviteCode=document.getElementById('signupInvite').value.trim().toUpperCase();
   const password=document.getElementById('signupPassword').value;
-  if(!first||!email||!workspace||!inviteCode||!password){showError('Please fill in all required fields.');return;}
+  selectedRole='admin';
+  if(!first||!email||!workspace||!password){showError('Please fill in first name, work email, workspace, and password.');return;}
   if(password.length<8){showError('Password must be at least 8 characters.');return;}
   if(!/^[a-z0-9-]+$/.test(workspace)){showError('Workspace: lowercase letters, numbers, hyphens only.');return;}
   const validCodes=getInviteCodes();
-  if(!validCodes.includes(inviteCode)){showError('Invalid or expired invitation code.');return;}
+  if(inviteCode && !validCodes.includes(inviteCode)){showError('Invalid or expired invitation code. Leave it blank for first admin setup.');return;}
   const users=getUsers();
   if(users.find(u=>u.email===email)){showError('An account with this email already exists.');return;}
   setLoading('signupBtn',true);
@@ -552,7 +535,7 @@ async function handleSignup(){
     email,name:`${first} ${last}`.trim(),
     role:selectedRole,workspace,
     createdAt:Date.now(),hash,
-    invitedBy:inviteCode
+    invitedBy:inviteCode || null
   };
   users.push(newUser);
   saveUsers(users);

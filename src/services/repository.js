@@ -970,6 +970,121 @@ export async function getTraceDetail(workspaceSlug, environmentName, traceId) {
   return { trace: trace.rows[0] || null, events: events.rows, waterfall };
 }
 
+
+export async function getTopology(workspaceSlug, environmentName) {
+  const env = await getEnvironment(workspaceSlug, environmentName);
+  if (!env) return { nodes: [], edges: [] };
+
+  const isSuccessStatus = (status) => {
+    const n = Number(status || 0);
+    return n >= 200 && n < 400;
+  };
+
+  if (!hasDatabase) {
+    const byTrace = new Map();
+    for (const l of fallback.logs.filter(x => x.environment_name === environmentName)) {
+      const raw = l.raw || {};
+      const traceId = l.trace_id || raw.trace_id || raw.event_id || raw.correlation_id || raw.transaction_id;
+      const status = raw.http_status || raw.status_code || raw.analytics?.http_status;
+      if (!traceId || ['ERROR','FATAL'].includes(String(l.severity || '').toUpperCase()) || (status && !isSuccessStatus(status))) continue;
+      const service = l.service_name || raw.service_name || raw.service || raw.app_name || raw.analytics?.application_name;
+      if (!service) continue;
+      const item = { service_name: String(service), latency_ms: Number(raw.latency_ms || raw.response_time_ms || raw.analytics?.latency_ms || 0), flow_name: raw.flow_name || raw.analytics?.flow_name || raw.payload?.entry?.FlowName || null, path: l.path || raw.path || raw.endpoint || null };
+      if (!byTrace.has(traceId)) byTrace.set(traceId, []);
+      byTrace.get(traceId).push(item);
+    }
+    return buildTopologyResponse([...byTrace.values()].flat(), byTrace);
+  }
+
+  const result = await query(
+    `WITH successful_logs AS (
+       SELECT le.trace_id,
+              le.timestamp,
+              COALESCE(NULLIF(s.name,''), NULLIF(le.raw->>'service_name',''), NULLIF(le.raw->>'service',''), NULLIF(le.raw->'analytics'->>'application_name','')) AS service_name,
+              COALESCE(NULLIF(le.raw->>'flow_name',''), NULLIF(le.raw->'analytics'->>'flow_name',''), NULLIF(le.raw->'payload'->'entry'->>'FlowName','')) AS flow_name,
+              COALESCE(ep.path, NULLIF(le.raw->>'path',''), NULLIF(le.raw->>'endpoint',''), NULLIF(le.raw->'analytics'->>'request_uri','')) AS path,
+              COALESCE(CASE WHEN (le.raw->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->>'latency_ms')::int END,
+                       CASE WHEN (le.raw->'analytics'->>'latency_ms') ~ '^[0-9]+$' THEN (le.raw->'analytics'->>'latency_ms')::int END,
+                       CASE WHEN (le.raw->>'duration_ms') ~ '^[0-9]+$' THEN (le.raw->>'duration_ms')::int END, 0) AS latency_ms,
+              COALESCE(NULLIF(le.raw->>'http_status',''), NULLIF(le.raw->>'status_code',''), NULLIF(le.raw->'analytics'->>'http_status','')) AS http_status
+        FROM log_events le
+        LEFT JOIN services s ON s.id=le.service_id
+        LEFT JOIN endpoints ep ON ep.id=le.endpoint_id
+        WHERE le.environment_id=$1
+          AND le.trace_id IS NOT NULL
+          AND le.severity NOT IN ('ERROR','FATAL')
+          AND COALESCE(NULLIF(s.name,''), NULLIF(le.raw->>'service_name',''), NULLIF(le.raw->>'service',''), NULLIF(le.raw->'analytics'->>'application_name','')) IS NOT NULL
+     )
+     SELECT * FROM successful_logs
+     WHERE http_status IS NULL OR http_status ~ '^[0-9]+$' AND http_status::int BETWEEN 200 AND 399
+     ORDER BY trace_id, timestamp ASC
+     LIMIT 5000`, [env.id]
+  );
+  const byTrace = new Map();
+  for (const row of result.rows) {
+    if (!byTrace.has(row.trace_id)) byTrace.set(row.trace_id, []);
+    byTrace.get(row.trace_id).push(row);
+  }
+  return buildTopologyResponse(result.rows, byTrace);
+}
+
+function buildTopologyResponse(rows, byTrace) {
+  const nodeMap = new Map();
+  const edgeMap = new Map();
+  const clean = (v) => String(v || '').replace(/\.xml(:[0-9]+)?$/i, '').trim();
+  for (const r of rows) {
+    const name = clean(r.service_name);
+    if (!name) continue;
+    const node = nodeMap.get(name) || { id: name, label: name, calls: 0, latency: [], errors: 0 };
+    node.calls += 1;
+    if (Number(r.latency_ms) > 0) node.latency.push(Number(r.latency_ms));
+    nodeMap.set(name, node);
+  }
+  for (const events of byTrace.values()) {
+    const ordered = events.map(e => ({ ...e, service_name: clean(e.service_name) })).filter(e => e.service_name);
+    const seen = [];
+    for (const e of ordered) if (seen[seen.length - 1] !== e.service_name) seen.push(e.service_name);
+    for (let i = 0; i < seen.length - 1; i++) {
+      const from = seen[i], to = seen[i + 1];
+      const key = `${from}->${to}`;
+      const edge = edgeMap.get(key) || { from, to, calls: 0, latency: [], flowNames: new Map(), paths: new Map() };
+      edge.calls += 1;
+      const step = ordered.find(x => x.service_name === to) || ordered[i + 1] || {};
+      if (Number(step.latency_ms) > 0) edge.latency.push(Number(step.latency_ms));
+      if (step.flow_name) edge.flowNames.set(step.flow_name, (edge.flowNames.get(step.flow_name) || 0) + 1);
+      if (step.path) edge.paths.set(step.path, (edge.paths.get(step.path) || 0) + 1);
+      edgeMap.set(key, edge);
+    }
+  }
+  const percentile = (arr, p) => {
+    const a = [...arr].sort((x,y)=>x-y);
+    if (!a.length) return 0;
+    return Math.round(a[Math.min(a.length - 1, Math.floor((p / 100) * a.length))]);
+  };
+  const topKey = (m) => [...m.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0] || null;
+  return {
+    nodes: [...nodeMap.values()].map(n => ({
+      id: n.id,
+      label: n.label,
+      calls: n.calls,
+      status: percentile(n.latency, 95) > 1500 ? 'degraded' : 'healthy',
+      error_rate: 0,
+      success_rate: 100,
+      p95_latency_ms: percentile(n.latency, 95)
+    })),
+    edges: [...edgeMap.values()].map(e => ({
+      from: e.from,
+      to: e.to,
+      calls: e.calls,
+      avg_latency_ms: e.latency.length ? Math.round(e.latency.reduce((a,b)=>a+b,0) / e.latency.length) : 0,
+      p95_latency_ms: percentile(e.latency, 95),
+      flow_name: topKey(e.flowNames),
+      path: topKey(e.paths),
+      status: 'success'
+    })).sort((a,b)=>b.calls-a.calls)
+  };
+}
+
 export async function getErrorGroups(workspaceSlug, environmentName, filters = {}) {
   const env = await getEnvironment(workspaceSlug, environmentName);
   if (!env || !hasDatabase) return [];

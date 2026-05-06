@@ -39,7 +39,6 @@
         <a class="nav-item" href="#rca" data-page-link="rca"><span class="icon" data-icon="rca"></span><span class="label">AI RCA</span></a>
         <a class="nav-item" href="#apiDocs" data-page-link="apiDocs"><span class="icon" data-icon="docs"></span><span class="label">API Docs</span></a>
         <a class="nav-item" href="#topology" data-page-link="topology"><span class="icon" data-icon="topology"></span><span class="label">Topology</span></a>
-        <a class="nav-item" href="#liveLogs" data-page-link="liveLogs"><span class="icon" data-icon="live"></span><span class="label">Live Logs</span></a>
         <a class="nav-item" href="#settings" data-page-link="settings"><span class="icon" data-icon="settings"></span><span class="label">Settings</span></a>
       </nav>
       <!-- User info chip -->
@@ -156,12 +155,11 @@
       <section class="page" data-page="topology">
         <div class="card topology-card">
           <div class="section-head">
-            <div><h3>Service Topology</h3><span>Discovered from ingested logs · live dependency map</span></div>
+            <div><h3>Service Topology</h3><span>Built from successful Flow Analytics traces</span></div>
             <div style="display:flex;gap:10px;align-items:center">
               <select id="topoFilter" style="height:40px;width:160px;font-size:13px;border-radius:12px">
-                <option value="all">All flows</option>
-                <option value="error">Error paths</option>
-                <option value="slow">Slow paths</option>
+                <option value="all">All successful flows</option>
+                <option value="slow">Slow successful flows</option>
               </select>
               <button id="refreshTopoBtn" class="secondary">Refresh</button>
             </div>
@@ -182,34 +180,6 @@
         <div class="grid-2" style="margin-top:18px">
           <div class="card"><div class="section-head"><h3>Service Dependencies</h3><span>Upstream / downstream call map</span></div><div id="depMatrix"></div></div>
           <div class="card"><div class="section-head"><h3>Critical Paths</h3><span>Highest impact request chains</span></div><div id="criticalPaths"></div></div>
-        </div>
-      </section>
-
-      <!-- ── LIVE LOGS PAGE ── -->
-      <section class="page" data-page="liveLogs">
-        <div class="card live-logs-card">
-          <div class="section-head">
-            <div><h3>Live Log Stream</h3><span id="wsStatusText">WebSocket — Simulating real-time ingestion</span></div>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <span class="ws-badge" id="wsBadge">⬤ Live</span>
-              <select id="liveLogLevel" style="height:40px;width:130px;font-size:13px;border-radius:12px">
-                <option value="">All levels</option>
-                <option value="ERROR">ERROR only</option>
-                <option value="WARN">WARN+</option>
-                <option value="INFO">INFO+</option>
-              </select>
-              <button id="livePauseBtn" class="secondary">⏸ Pause</button>
-              <button id="liveClearBtn" class="secondary">Clear</button>
-            </div>
-          </div>
-          <div class="live-stats-bar">
-            <div class="live-stat"><span>Rate</span><strong id="liveRate">0/s</strong></div>
-            <div class="live-stat"><span class="level ERROR" style="font-size:10px">ERR</span><strong id="liveErrors">0</strong></div>
-            <div class="live-stat"><span class="level WARN" style="font-size:10px">WRN</span><strong id="liveWarns">0</strong></div>
-            <div class="live-stat"><span class="level INFO" style="font-size:10px">INF</span><strong id="liveInfos">0</strong></div>
-            <div class="live-stat"><span>Buffer</span><strong id="liveBuffer">0/500</strong></div>
-          </div>
-          <div class="live-stream" id="liveStream"></div>
         </div>
       </section>
 

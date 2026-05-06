@@ -53,10 +53,10 @@ function setPage(page){
   const titles={
     overview:'Overview',apis:'APIs & Endpoints',logs:'Log Search',
     uploads:'Upload History',alerts:'Alerts',ops:'Ops',rca:'AI RCA',
-    apiDocs:'API Docs',topology:'Service Topology',liveLogs:'Live Logs',settings:'Settings'
+    apiDocs:'API Docs',topology:'Service Topology',settings:'Settings'
   };
   setText('pageTitle',titles[state.page]||'ObserveX');
-  $('topActions')&&$('topActions').classList.toggle('visible',!['logs','settings','topology','liveLogs'].includes(state.page));
+  $('topActions')&&$('topActions').classList.toggle('visible',!['logs','settings','topology'].includes(state.page));
   if(location.hash.slice(1)!==state.page)history.replaceState(null,'',`#${state.page}`);
   // Load page-specific data on navigation
   if(state.page==='logs')     { searchLogs(1); loadApisEndpoints(); loadSavedSearches(); loadErrorGroups(); }
@@ -66,7 +66,6 @@ function setPage(page){
   if(state.page==='ops')      { loadAlertsOps(); }
   if(state.page==='apiDocs')  { renderApiDoc('apiIngest'); }
   if(state.page==='topology') { setTimeout(initTopo,100); }
-  if(state.page==='liveLogs') { liveStartTime=Date.now(); setTimeout(()=>{startLiveLogs();bindLiveLogs();},80); }
   if(state.page==='settings') { setTimeout(()=>{initSettings();loadSettingsTab('profile');},50); }
 }
 function empty(msg){return `<div class="empty">${esc(msg)}</div>`;}
@@ -876,7 +875,7 @@ async function refreshAll(){$('tenantEnvChip')&&($('tenantEnvChip').textContent=
 (async function boot(){applyTheme();applySidebar();bind();await initWorkspaces();setPage(state.page);await refreshAll();})();
 
 /* ═══════════════════════════════════════════════════════════
-   v36 ADDITIONS — Auth guard, Settings, Topology, Live Logs,
+   v36 ADDITIONS — Auth guard, Settings, Topology,
    RBAC, Notifications, Approvals, Delete endpoints, etc.
    ═══════════════════════════════════════════════════════════ */
 
@@ -899,7 +898,6 @@ function renderUserChip(sess){
 // ── ICONS EXTENDED ──
 const iconsExtra={
   topology:'<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M8.5 17.5l3-4.5 4.5 4.5M5.5 17.5 12 11"/></svg>',
-  live:'<svg viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 8 0"/><path d="M4.5 8.5a10 10 0 0 1 15 0"/><path d="M1 5a14.5 14.5 0 0 1 22 0"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
   settings:'<svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 };
 
@@ -1065,10 +1063,10 @@ function loadApiKeysTab(){
       <span class="key-scope">${esc(k.env||'PROD')}</span>
       <span class="role-badge ${k.role==='full'?'admin':k.role==='read'?'member':'viewer'}">${esc(k.role||'ingest')}</span>
       <small style="color:var(--muted)">${new Date(k.createdAt||Date.now()).toLocaleDateString()}</small>
-      <button class="secondary danger" style="padding:6px 10px;font-size:11px" onclick="deleteIngestKey('${esc(k.id)}')">Delete</button>
+      <button class="secondary danger" style="padding:6px 10px;font-size:11px" onclick="deleteLocalIngestKey('${esc(k.id)}')">Delete</button>
     </div>`).join('');
 }
-function deleteIngestKey(id){
+function deleteLocalIngestKey(id){
   if(!confirm('Delete this API key? It will stop working immediately.')) return;
   const keys=getIngestKeys().filter(k=>k.id!==id);
   saveIngestKeys(keys);
@@ -1294,38 +1292,41 @@ function createApproval(title,description){
 let topoNodes=[],topoEdges=[],topoAnimFrame=null,topoSelected=null;
 const topoColors={healthy:'#10b981',degraded:'#f59e0b',down:'#f43f5e',unknown:'#6b7280'};
 
-function buildTopoFromLogs(){
-  const svcs=state.services||[];
-  const eps=state.endpoints||[];
-  // Build nodes from services
-  const nodes=svcs.map((s,i)=>({
-    id:s.service_name||s.name||`svc-${i}`,
-    label:(s.service_name||s.name||'').replace('s-','').replace('-api',''),
-    status: (s.error_rate_pct||0)>5 ? 'down' : (s.error_rate_pct||0)>1 ? 'degraded' : 'healthy',
-    calls: s.total_calls||s.request_count||0,
-    errorRate: s.error_rate_pct||0,
-    p95: s.p95_latency_ms||0,
-    x: 0, y: 0, vx: 0, vy: 0 // will be set by layout
+async function loadTopologyData(){
+  const payload=await api(endpoint('/topology'));
+  const nodes=(payload.nodes||[]).map((n,i)=>({
+    id:n.id||n.service_name||`svc-${i}`,
+    label:n.label||n.service_name||'Unknown service',
+    status:n.status||'healthy',
+    calls:Number(n.calls||0),
+    errorRate:Number(n.error_rate||0),
+    p95:Number(n.p95_latency_ms||0),
+    successRate:Number(n.success_rate||100),
+    x:0,y:0,vx:0,vy:0
   }));
-  // Demo nodes if none
-  if(!nodes.length){
-    ['API Gateway','Payment Engine','Auth Service','User Service','Notification','DB Proxy','Message Queue'].forEach((label,i)=>{
-      nodes.push({id:`demo-${i}`,label,status:['healthy','healthy','degraded','healthy','healthy','down','healthy'][i],calls:Math.floor(Math.random()*5000+100),errorRate:[0.1,0.3,4.2,0.1,0.2,12.5,0.1][i],p95:Math.floor(Math.random()*400+50),x:0,y:0,vx:0,vy:0});
-    });
-  }
-  // Build edges: simulate or derive from known patterns
-  const edges=[];
-  if(nodes.length>1){
-    edges.push({from:nodes[0].id,to:nodes[1].id,weight:3,error:nodes[1].status==='down'});
-    edges.push({from:nodes[0].id,to:nodes[2]?.id||nodes[1].id,weight:2,error:false});
-    if(nodes[3]) edges.push({from:nodes[1].id,to:nodes[3].id,weight:1,error:false});
-    if(nodes[4]) edges.push({from:nodes[1].id,to:nodes[4].id,weight:1,error:nodes[4]?.status==='down'});
-    if(nodes[5]) edges.push({from:nodes[2]?.id,to:nodes[5].id,weight:2,error:nodes[5]?.status==='down'});
-    if(nodes[6]) edges.push({from:nodes[3]?.id,to:nodes[6].id,weight:1,error:false});
-  }
+  const edges=(payload.edges||[]).map(e=>({
+    from:e.from,
+    to:e.to,
+    weight:Math.max(1,Math.min(6,Math.round(Number(e.calls||1)/10)+1)),
+    error:false,
+    calls:Number(e.calls||0),
+    avgLatency:Number(e.avg_latency_ms||0),
+    p95:Number(e.p95_latency_ms||0),
+    flowName:e.flow_name||'',
+    path:e.path||''
+  })).filter(e=>e.from&&e.to&&e.from!==e.to);
   topoNodes=nodes; topoEdges=edges;
 }
 
+async function buildTopoFromLogs(){
+  try{
+    await loadTopologyData();
+    setText('topoSourceText', topoEdges.length ? 'Successful Flow Analytics data' : 'No successful flow data yet');
+  }catch(e){
+    topoNodes=[]; topoEdges=[];
+    toast(`Topology unavailable: ${e.message}`,'error');
+  }
+}
 function layoutTopo(canvas){
   const W=canvas.width,H=canvas.height;
   const n=topoNodes.length; if(!n) return;
@@ -1427,9 +1428,9 @@ function drawTopo(){
   });
 }
 
-function initTopo(){
+async function initTopo(){
   const canvas=$('topoCanvas'); if(!canvas) return;
-  buildTopoFromLogs();
+  await buildTopoFromLogs();
   layoutTopo(canvas);
   drawTopo();
   canvas.onclick=e=>{
@@ -1448,7 +1449,7 @@ function initTopo(){
   // Dependency matrix
   renderDepMatrix();
   renderCriticalPaths();
-  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=()=>{buildTopoFromLogs();layoutTopo(canvas);drawTopo();renderDepMatrix();renderCriticalPaths();};
+  if($('refreshTopoBtn')) $('refreshTopoBtn').onclick=async()=>{await buildTopoFromLogs();layoutTopo(canvas);drawTopo();renderDepMatrix();renderCriticalPaths();};
   window.addEventListener('resize',()=>{const c=$('topoCanvas');if(c){c.width=0;drawTopo();}});
 }
 function showTopoDetail(node){
@@ -1471,116 +1472,30 @@ function showTopoDetail(node){
 }
 function renderDepMatrix(){
   const el=$('depMatrix'); if(!el) return;
-  if(!topoEdges.length){el.innerHTML='<div class="empty">No dependency data yet. Ingest logs to discover service connections.</div>';return;}
+  if(!topoEdges.length){el.innerHTML='<div class="empty">No successful dependency data yet. Upload logs with trace IDs / FlowName / HTTP 2xx events to build the map.</div>';return;}
   el.innerHTML=topoEdges.map(e=>{
     const from=topoNodes.find(n=>n.id===e.from);
     const to=topoNodes.find(n=>n.id===e.to);
     if(!from||!to) return '';
-    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:${e.error?'#f87171':'var(--text)'}">${esc(to.label)}</span><span class="level ${e.error?'ERROR':'INFO'}" style="font-size:10px">${e.error?'ERROR':'OK'}</span></div>`;
+    return `<div class="dep-item"><span style="color:var(--muted)">${esc(from.label)}</span><span class="dep-arrow">→</span><span style="color:var(--text)">${esc(to.label)}</span><span class="level INFO" style="font-size:10px">${fmt(e.calls)} calls</span></div>`;
   }).join('');
 }
 function renderCriticalPaths(){
   const el=$('criticalPaths'); if(!el) return;
   if(!topoNodes.length){el.innerHTML='<div class="empty">No data yet.</div>';return;}
-  const paths=topoNodes.filter(n=>n.errorRate>0).sort((a,b)=>b.errorRate-a.errorRate).slice(0,5);
-  if(!paths.length){el.innerHTML='<div class="empty">No critical paths detected.</div>';return;}
-  el.innerHTML=paths.map(n=>`
+  const paths=[...topoEdges].sort((a,b)=>(b.avgLatency||0)-(a.avgLatency||0)).slice(0,5);
+  if(!paths.length){el.innerHTML='<div class="empty">No successful request chains detected yet.</div>';return;}
+  el.innerHTML=paths.map(e=>{const from=topoNodes.find(n=>n.id===e.from);const to=topoNodes.find(n=>n.id===e.to);return `
     <div class="critical-path-item">
-      <div><code>${esc(n.label)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">via ingested traces</div></div>
-      <div class="cp-latency" style="color:${n.errorRate>5?'#f87171':'#f59e0b'}">${n.errorRate.toFixed(1)}% err</div>
-    </div>`).join('');
+      <div><code>${esc(from?.label||e.from)} → ${esc(to?.label||e.to)}</code><div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(e.flowName||e.path||'successful flow')}</div></div>
+      <div class="cp-latency">${fmtMs(e.avgLatency)}</div>
+    </div>`}).join('');
 }
 
-// ── LIVE LOGS (WebSocket simulation) ──
-let liveRunning=false,livePaused=false,liveInterval=null;
-let liveCounts={errors:0,warns:0,infos:0,total:0};
-const LIVE_SERVICES=['s-paymentengine-api','s-auth-service','s-user-api','s-notification','s-gateway','s-db-proxy'];
-const LIVE_PATHS=['/payment/charge','/auth/login','/user/profile','/notification/send','/api/health','/db/query'];
-const LIVE_MSGS={ERROR:['HTTP:NOT_FOUND while calling downstream','Connection timeout exceeded 30s','NullPointerException in handler chain','Database lock wait timeout'],WARN:['Response time exceeded 2s SLA','Circuit breaker open - using fallback','Rate limit approaching threshold','Cache miss ratio high'],INFO:['Request processed successfully','Health check passed','Config refreshed from vault','Session token renewed']};
-const LIVE_LEVELS=['INFO','INFO','INFO','WARN','ERROR','INFO','WARN','INFO'];
-
-function startLiveLogs(){
-  if(liveRunning) return;
-  liveRunning=true;
-  const badge=$('wsBadge');
-  if(badge){badge.textContent='⬤ Live';badge.className='ws-badge';}
-  liveInterval=setInterval(()=>{
-    if(livePaused) return;
-    const filterLevel=$('liveLogLevel')?.value||'';
-    const level=LIVE_LEVELS[Math.floor(Math.random()*LIVE_LEVELS.length)];
-    if(filterLevel&&level!==filterLevel&&!(filterLevel==='WARN'&&['WARN','ERROR'].includes(level))) return;
-    const svc=LIVE_SERVICES[Math.floor(Math.random()*LIVE_SERVICES.length)];
-    const path=LIVE_PATHS[Math.floor(Math.random()*LIVE_PATHS.length)];
-    const msgs=LIVE_MSGS[level]||LIVE_MSGS.INFO;
-    const msg=msgs[Math.floor(Math.random()*msgs.length)];
-    const ts=new Date().toLocaleTimeString();
-    liveCounts.total++;
-    if(level==='ERROR') liveCounts.errors++;
-    else if(level==='WARN') liveCounts.warns++;
-    else liveCounts.infos++;
-    const stream=$('liveStream');
-    if(stream){
-      const line=document.createElement('div');
-      line.className=`live-line ${level}`;
-      line.innerHTML=`<span class="live-ts">${esc(ts)}</span><span class="level ${level}">${level}</span><span class="live-svc">${esc(svc.replace('s-',''))}</span><span class="live-msg">${esc(msg)}</span><span class="live-path">${esc(path)}</span>`;
-      stream.prepend(line);
-      // Buffer cap
-      const items=stream.children;
-      if(items.length>500) for(let i=items.length-1;i>=500;i--) items[i].remove();
-    }
-    // Update stats
-    const rate=(liveCounts.total/((Date.now()-(liveStartTime||Date.now()))/1000)).toFixed(1);
-    setText('liveRate',`${Math.max(1,Math.floor(Math.random()*4+1))}/s`);
-    setText('liveErrors',liveCounts.errors);
-    setText('liveWarns',liveCounts.warns);
-    setText('liveInfos',liveCounts.infos);
-    const stream2=$('liveStream');
-    setText('liveBuffer',`${stream2?stream2.children.length:0}/500`);
-  }, 800);
-}
-let liveStartTime=Date.now();
-
-function stopLiveLogs(){
-  liveRunning=false;
-  if(liveInterval){clearInterval(liveInterval);liveInterval=null;}
-  const badge=$('wsBadge');
-  if(badge){badge.textContent='⬤ Paused';badge.className='ws-badge paused';}
-}
-
-function bindLiveLogs(){
-  if($('livePauseBtn')) $('livePauseBtn').onclick=()=>{
-    livePaused=!livePaused;
-    $('livePauseBtn').textContent=livePaused?'▶ Resume':'⏸ Pause';
-    const badge=$('wsBadge');
-    if(badge){badge.textContent=livePaused?'⬤ Paused':'⬤ Live';badge.className=`ws-badge ${livePaused?'paused':''}`;}
-  };
-  if($('liveClearBtn')) $('liveClearBtn').onclick=()=>{
-    const s=$('liveStream'); if(s) s.innerHTML='';
-    liveCounts={errors:0,warns:0,infos:0,total:0};
-    setText('liveErrors',0);setText('liveWarns',0);setText('liveInfos',0);setText('liveBuffer','0/500');
-  };
-}
-
-// ── HOOK: intercept nav-item clicks for new pages ──
-// Safe approach: augment nav items after DOM ready, avoid hoisting conflict
+// ── EXTENDED NAV ICONS ──
 function hookNewPageNav(){
-  // Use document-level delegation to avoid double-bind conflicts
-  // setPage() already handles all new page routing via patched version above
-  // This function now just ensures icons are rendered for new nav items
   Object.entries(iconsExtra).forEach(([k,v])=>{
     $$(`[data-icon="${k}"]`).forEach(x=>{ if(!x.innerHTML.trim()) x.innerHTML=v; });
-  });
-  // Stop live log stream when navigating away from liveLogs page
-  $$('[data-page-link]').forEach(a=>{
-    const pg=a.dataset.pageLink;
-    if(pg&&pg!=='liveLogs'){
-      const prev=a.onclick;
-      a.onclick=(e)=>{
-        if(liveRunning&&state.page==='liveLogs') stopLiveLogs();
-        if(prev) prev.call(a,e);
-        else { e.preventDefault(); setPage(pg); }
-      };
-    }
   });
 }
 
